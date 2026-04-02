@@ -67,6 +67,30 @@ def insert_record(data: dict):
         conn.commit()
     return {'success': True, 'table_name': table_name, 'db_location': db_location}
 
+def update_record(data: dict):
+    db_location = data.get('db_location')
+    table_name = data.get('table_name')
+    updates = data.get('updates') or data.get('record')
+    criteria = data.get('criteria')
+    if not table_name or not isinstance(updates, dict) or not updates:
+        return {'success': False, 'error': 'table_name and updates are required'}
+    if not isinstance(criteria, dict) or not criteria:
+        return {'success': False, 'error': 'criteria is required'}
+    assignments = ', '.join(f'{key} = ?' for key in updates)
+    conditions = ' AND '.join(f'{key} = ?' for key in criteria)
+    values = tuple(updates.values()) + tuple(criteria.values())
+    with get_connection(db_location) as conn:
+        cursor = conn.execute(
+            f'UPDATE {table_name} SET {assignments} WHERE {conditions}',
+            values,
+        )
+        conn.commit()
+    return {
+        'success': True,
+        'table_name': table_name,
+        'db_location': db_location,
+        'updated_count': cursor.rowcount,
+    }
 
 def delete_record(data: dict):
     db_location = data.get('db_location')
