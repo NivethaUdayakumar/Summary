@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Menu</title>
+  <link rel="stylesheet" href="/static/Vendor/semantic-ui/semantic.min.css" />
+  <link rel="stylesheet" href="/static/Pages/Menu/Menu.css" />
+</head>
+<body>
+  <div class="menu-container">
+    <div class="ui inverted menu">
+      <a class="active item">DashAI</a>
+      <div class="item" id="userItem"></div>
+      <div class="item" id="roleItem"></div>
+      <div class="item" id="projectItem"></div>
+      <div class="right menu">
+        <a class="item" id="logoutBtn">Logout</a>
+      </div>
+    </div>
+
+    <div class="menu-content">
+      <div class="ui cards">
+        <div class="card">
+          <div class="content">
+            <div class="header">Bond</div>
+            <div class="description">
+              Access the Bond project dashboard with project code: project1.
+            </div>
+          </div>
+          <div class="ui bottom attached button" onclick="openDashboard('project1')">
+            Open Dashboard
+          </div>
+        </div>
+        <div class="card">
+          <div class="content">
+            <div class="header">Clover</div>
+            <div class="description">
+              Access the Clover project dashboard with project code: project2.
+            </div>
+          </div>
+          <div class="ui bottom attached button" onclick="openDashboard('project2')">
+            Open Dashboard
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/static/Pages/Menu/Menu.js"></script>
+</body>
+</html>

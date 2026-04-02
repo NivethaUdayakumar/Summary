@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Profile Manager</title>
+  <link rel="stylesheet" href="/static/Vendor/semantic-ui/semantic.min.css" />
+  <link rel="stylesheet" href="/static/Vendor/datatables/datatables.min.css" />
+  <link rel="stylesheet" href="/static/Pages/ProfileManager/ProfileManager.css" />
+</head>
+<body>
+  <div class="profile-manager-shell">
+    <section class="profile-toolbar">
+      <div class="ui stackable two column grid profile-toolbar-grid">
+        <div class="column">
+          <form class="ui small form" id="createUserForm">
+            <div class="fields">
+              <div class="five wide field">
+                <label>New User ID</label>
+                <input type="text" id="newUserId" placeholder="mtk12345" />
+              </div>
+              <div class="four wide field">
+                <label>Role</label>
+                <select id="newUserRole" class="ui dropdown">
+                  <option value="user">user</option>
+                  <option value="admin">admin</option>
+                </select>
+              </div>
+              <div class="five wide field">
+                <label>Password</label>
+                <input type="password" id="newUserPassword" placeholder="Password" />
+              </div>
+              <div class="two wide field profile-action-field">
+                <label>&nbsp;</label>
+                <button class="ui primary button" type="submit">Add</button>
+              </div>
+            </div>
+          </form>
+        </div>
+        <div class="column">
+          <div class="ui small form">
+            <div class="fields">
+              <div class="four wide field">
+                <label>Selected User</label>
+                <input type="text" id="selectedUserId" placeholder="Click a row" readonly />
+              </div>
+              <div class="three wide field">
+                <label>Role</label>
+                <select id="selectedUserRole" class="ui dropdown">
+                  <option value="user">user</option>
+                  <option value="admin">admin</option>
+                </select>
+              </div>
+              <div class="five wide field">
+                <label>New Password</label>
+                <input type="password" id="selectedUserPassword" placeholder="Updated password" />
+              </div>
+              <div class="four wide field">
+                <label>&nbsp;</label>
+                <div class="profile-button-group">
+                  <button class="ui button" type="button" id="updateRoleButton">Update Role</button>
+                  <button class="ui button" type="button" id="updatePasswordButton">Update Password</button>
+                  <button class="ui red button" type="button" id="deleteUserButton">Delete</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="profileManagerMessage" class="ui hidden message"></div>
+    </section>
+
+    <section class="profile-table-panel">
+      <div class="profile-table-tools">
+        <div class="ui left icon input profile-search">
+          <input type="text" id="tableSearchInput" placeholder="Search users" />
+          <i class="search icon"></i>
+        </div>
+        <div class="profile-selection-status" id="profileSelectionStatus">No user selected</div>
+      </div>
+
+      <div class="profile-table-scroll">
+        <table class="ui celled striped selectable compact table dataTable profile-table" id="profileUserTable">
+          <thead>
+            <tr>
+              <th><button type="button" class="profile-sort-button" data-sort-key="user_id">User ID</button></th>
+              <th><button type="button" class="profile-sort-button" data-sort-key="role">Role</button></th>
+            </tr>
+          </thead>
+          <tbody id="profileUserTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/Pages/ProfileManager/ProfileManager.js"></script>
+</body>
+</html>

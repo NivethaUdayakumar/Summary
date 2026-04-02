@@ -1,0 +1,33 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: Lato, 'Helvetica Neue', Arial, Helvetica, sans-serif;
+  background: #f5f7fa;
+  color: #1b1c1d;
+}
+
+.content-page-shell {
+  min-height: 100%;
+  padding: 1.5rem;
+}
+
+.content-page-panel {
+  border-radius: 0.75rem !important;
+}
+
+.content-page-copy {
+  max-width: 52rem;
+  color: rgba(0, 0, 0, 0.68);
+}
+
+.content-page-cards {
+  margin-top: 1.5rem !important;
+}
+
+.content-page-cards .description {
+  color: rgba(0, 0, 0, 0.65);
+}

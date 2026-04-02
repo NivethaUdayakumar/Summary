@@ -1,0 +1,119 @@
+.dashboard-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-menu.ui.menu.fixed {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  min-height: 3rem;
+  z-index: 1000;
+  overflow: visible;
+}
+
+.dashboard-nav {
+  display: flex;
+  min-width: 0;
+}
+
+.dashboard-menu.ui.menu.fixed .item {
+  min-height: 3rem;
+  line-height: 1.2;
+  padding: 0 1rem;
+}
+
+.dashboard-content {
+  flex: 1;
+  padding-top: 3rem;
+  background: #f8f9fa;
+  min-height: calc(100vh - 3rem);
+}
+
+.dashboard-frame {
+  width: 100%;
+  height: calc(100vh - 3rem);
+  border: 0;
+  background: #ffffff;
+}
+
+.dashboard-dropdown {
+  position: relative;
+  padding: 0 !important;
+}
+
+.dashboard-nav-item {
+  cursor: pointer;
+}
+
+.dashboard-dropdown-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 100%;
+  padding: 0 1rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.dashboard-dropdown-toggle:focus {
+  outline: none;
+}
+
+.dashboard-dropdown.is-open .dashboard-dropdown-menu {
+  display: block;
+}
+
+.dashboard-dropdown.is-active .dashboard-dropdown-toggle,
+.dashboard-nav-item.active {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+.dashboard-dropdown-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% - 1px);
+  left: 0;
+  min-width: 13rem;
+  background: #1b1c1d;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.24);
+  z-index: 1001;
+}
+
+.dashboard-dropdown-menu .item {
+  display: block;
+  color: rgba(255, 255, 255, 0.85);
+  padding: 0.85rem 1rem !important;
+  white-space: nowrap;
+}
+
+.dashboard-dropdown-menu .item:hover,
+.dashboard-dropdown-menu .item.active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.dashboard-meta {
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .dashboard-menu.ui.menu.fixed {
+    overflow-x: auto;
+  }
+
+  .dashboard-nav {
+    flex-wrap: nowrap;
+  }
+
+  .dashboard-meta {
+    font-size: 0.9rem;
+  }
+}

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Register</title>
+  <link rel="stylesheet" href="/static/Vendor/semantic-ui/semantic.min.css" />
+  <link rel="stylesheet" href="/static/Pages/Register/Register.css" />
+</head>
+<body>
+  <div class="auth-container">
+    <div class="hero-panel">
+      <div class="hero-inner logo-row">
+        <div class="hero-icon">&#10157;</div>
+        <div class="hero-title-wrap">
+          <h1>DashAI</h1>
+          <p>Create your account to access the dashboard and project tools.</p>
+        </div>
+      </div>
+    </div>
+    <div class="form-panel">
+      <div class="auth-card">
+        <h2>Register</h2>
+        <form class="ui large form" id="registerForm">
+          <div class="field">
+            <div class="ui input full-width">
+              <input type="text" id="userId" placeholder="mtk12345" autocomplete="username" />
+            </div>
+          </div>
+          <div class="field">
+            <div class="ui input full-width">
+              <input type="password" id="password" placeholder="Password" autocomplete="new-password" />
+            </div>
+          </div>
+          <div class="field">
+            <label>Role</label>
+            <select id="role" class="ui dropdown full-width">
+              <option value="user">user</option>
+              <option value="admin">admin</option>
+            </select>
+          </div>
+          <button class="ui fluid large blue submit button" type="submit">Register</button>
+        </form>
+        <div class="footer-text">
+          Already have an account? <a id="loginLink" href="#">Login</a>
+        </div>
+        <div id="registerMessage" class="ui message hidden"></div>
+      </div>
+    </div>
+  </div>
+  <script src="/static/Pages/Register/Register.js"></script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard</title>
+  <link rel="stylesheet" href="/static/Vendor/semantic-ui/semantic.min.css" />
+  <link rel="stylesheet" href="/static/Pages/Dashboard/Dashboard.css" />
+</head>
+<body>
+  <div class="dashboard-container">
+    <div class="ui inverted fixed menu dashboard-menu">
+      <a class="header item">DashAI</a>
+      <div class="dashboard-nav" id="dashboardNav"></div>
+      <div class="right menu">
+        <a class="item dashboard-meta" id="projectNameItem"></a>
+        <a class="item dashboard-meta" id="projectCodeItem"></a>
+        <a class="item dashboard-meta" id="userItem"></a>
+        <a class="item dashboard-meta" id="roleItem"></a>
+        <a class="item" id="logoutBtn">Logout</a>
+      </div>
+    </div>
+
+    <main class="dashboard-content">
+      <iframe
+        id="dashboardFrame"
+        class="dashboard-frame"
+        title="Dashboard content view"
+        src="/api/dashboard?tab=Summary"></iframe>
+    </main>
+  </div>
+
+  <script src="/static/Pages/Dashboard/Dashboard.js"></script>
+</body>
+</html>

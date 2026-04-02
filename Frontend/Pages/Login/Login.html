@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login</title>
+  <link rel="stylesheet" href="/static/Vendor/semantic-ui/semantic.min.css" />
+  <link rel="stylesheet" href="/static/Pages/Login/Login.css" />
+</head>
+<body>
+  <div class="auth-container">
+    <div class="hero-panel">
+      <div class="hero-inner logo-row">
+        <div class="hero-icon">&#10157;</div>
+        <div class="hero-title-wrap">
+          <h1>DashAI</h1>
+          <p>Secure access to your dashboard and project workspace.</p>
+        </div>
+      </div>
+    </div>
+    <div class="form-panel">
+      <div class="auth-card">
+        <h2>Login</h2>
+        <form class="ui large form" id="loginForm">
+          <div class="field">
+            <div class="ui input full-width">
+              <input type="text" id="userId" placeholder="Username" autocomplete="username" />
+            </div>
+          </div>
+          <div class="field">
+            <div class="ui input full-width">
+              <input type="password" id="password" placeholder="Password" autocomplete="current-password" />
+            </div>
+          </div>
+          <button class="ui fluid large blue submit button" type="submit">Login</button>
+        </form>
+        <div class="footer-text">
+          Don't have an account? <a id="registerLink" href="#">Register</a>
+        </div>
+        <div id="loginMessage" class="ui message hidden"></div>
+      </div>
+    </div>
+  </div>
+  <script src="/static/Pages/Login/Login.js"></script>
+</body>
+</html>

@@ -1,0 +1,93 @@
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: 'Segoe UI', Arial, sans-serif;
+  background: #f1f3f6;
+}
+.auth-container {
+  display: flex;
+  min-height: 100vh;
+}
+.hero-panel,
+.form-panel {
+  flex: 1;
+}
+.hero-panel {
+  background: #2f3b53;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+}
+.hero-inner {
+  max-width: 420px;
+  text-align: center;
+}
+.hero-icon {
+  width: 80px;
+  height: 80px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.12);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1.5rem;
+  font-size: 4rem;
+}
+.hero-panel h1 {
+  margin: 0;
+  font-size: 2.5rem;
+}
+.hero-panel p {
+  margin: 1.4rem auto;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.8);
+}
+.guide-button {
+  margin-top: 1rem;
+}
+.form-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+}
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 3rem;
+  background: #fff;
+  border-radius: 24px;
+  box-shadow: 0 24px 60px rgba(23, 42, 66, 0.08);
+}
+.auth-card h2 {
+  margin-bottom: 1.5rem;
+  color: #2f3b53;
+}
+.full-width {
+  width: 100%;
+}
+.footer-text {
+  margin-top: 1rem;
+  text-align: center;
+}
+#loginMessage {
+  margin-top: 1.25rem;
+}
+.hidden {
+  display: none !important;
+}
+@media (max-width: 900px) {
+  .auth-container {
+    flex-direction: column;
+  }
+  .hero-panel,
+  .form-panel {
+    padding: 2rem;
+  }
+  .hero-panel {
+    min-height: 320px;
+  }
+}

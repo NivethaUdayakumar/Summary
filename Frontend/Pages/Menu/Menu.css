@@ -1,0 +1,32 @@
+.menu-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.menu-content {
+  background: #f8f9fa;
+  min-height: 100vh;
+  padding-left: 25px;
+  padding-right: 25px;
+}
+
+.ui.container {
+  padding: 0 1rem 1rem; /* keep compact top spacing */
+}
+
+.menu-content {
+  flex: 1;
+  padding-top: 3vh; /* top menu buffer */
+  background: #f8f9fa;
+  min-height: calc(100vh - 3vh);
+}
+
+
+.ui.card .content {
+  flex-grow: 1;
+}
+
+.ui.card .extra.content {
+  text-align: center;
+}
