@@ -1,6 +1,6 @@
 from flask import jsonify, request
 
-from Backend.Routers.PageRoutes import auth, manage_tab, profile_manager, python_exec, session as session_routes, table
+from Backend.Routers.PageRoutes import auth, manage_tab, python_exec, session as session_routes, table
 
 def register_routes(app):
     @app.route('/')
@@ -95,23 +95,3 @@ def register_routes(app):
         if not project_code:
             return jsonify(success=False, error='project_code parameter is required'), 400
         return session_routes.project_name_route(project_code)
-
-    @app.route('/api/users', methods=['GET'])
-    def get_users_route():
-        return profile_manager.get_users()
-
-    @app.route('/api/users', methods=['POST'])
-    def create_user_route():
-        return profile_manager.create_user()
-
-    @app.route('/api/users/<user_id>/role', methods=['PUT'])
-    def update_user_role_route(user_id):
-        return profile_manager.update_user_role(user_id)
-
-    @app.route('/api/users/<user_id>/password', methods=['PUT'])
-    def update_user_password_route(user_id):
-        return profile_manager.update_user_password(user_id)
-
-    @app.route('/api/users/<user_id>', methods=['DELETE'])
-    def delete_user_route(user_id):
-        return profile_manager.delete_user(user_id)

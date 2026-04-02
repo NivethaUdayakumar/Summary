@@ -10,7 +10,13 @@ const updateRoleButton = document.getElementById('updateRoleButton');
 const updatePasswordButton = document.getElementById('updatePasswordButton');
 const deleteUserButton = document.getElementById('deleteUserButton');
 
+const USERS_DB_LOCATION = 'AppData/App.db';
+const USERS_TABLE_NAME = 'users';
+const USER_ID_PATTERN = /^mtk\d+$/;
+
 const profileState = {
+  currentRole: '',
+  currentUserId: '',
   searchTerm: '',
   selectedUserId: '',
   sortDirection: 'asc',
@@ -23,8 +29,13 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 async function initializeProfileManager() {
-  bindProfileManagerEvents();
-  await loadUsers();
+  try {
+    await loadSessionInfo();
+    bindProfileManagerEvents();
+    await loadUsers();
+  } catch (error) {
+    showProfileMessage(error.message, false);
+  }
 }
 
 function bindProfileManagerEvents() {
@@ -56,22 +67,36 @@ async function fetchJson(url, options = {}) {
   return result;
 }
 
-async function loadUsers() {
-  try {
-    const result = await fetchJson('/api/users');
-    profileState.users = Array.isArray(result.users) ? result.users : [];
-    const selectedUser = profileState.users.find((user) => user.user_id === profileState.selectedUserId);
+async function loadSessionInfo() {
+  const result = await fetchJson('/api/session');
+  profileState.currentRole = String(result.role || '');
+  profileState.currentUserId = String(result.user_id || '').toLowerCase();
 
-    if (selectedUser) {
-      setSelectedUser(selectedUser.user_id, selectedUser.role);
-    } else {
-      setSelectedUser('');
-    }
-
-    renderUserTable();
-  } catch (error) {
-    showProfileMessage(error.message, false);
+  if (profileState.currentRole !== 'admin') {
+    throw new Error('admin access required');
   }
+}
+
+async function loadUsers() {
+  const result = await fetchJson('/api/query-table', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      db_location: USERS_DB_LOCATION,
+      query: 'SELECT user_id, role FROM users ORDER BY user_id',
+    }),
+  });
+
+  profileState.users = Array.isArray(result.rows) ? result.rows : [];
+  const selectedUser = profileState.users.find((user) => user.user_id === profileState.selectedUserId);
+
+  if (selectedUser) {
+    setSelectedUser(selectedUser.user_id, selectedUser.role);
+  } else {
+    setSelectedUser('');
+  }
+
+  renderUserTable();
 }
 
 function renderUserTable() {
@@ -145,15 +170,38 @@ async function handleCreateUser(event) {
   const role = document.getElementById('newUserRole').value;
   const password = document.getElementById('newUserPassword').value;
 
+  if (!userId || !role || !password) {
+    showProfileMessage('User ID, role, and password are required.', false);
+    return;
+  }
+
+  if (!USER_ID_PATTERN.test(userId)) {
+    showProfileMessage('User ID must begin with mtk followed by digits.', false);
+    return;
+  }
+
+  if (profileState.users.some((user) => user.user_id === userId)) {
+    showProfileMessage('user already exists', false);
+    return;
+  }
+
   try {
-    const result = await fetchJson('/api/users', {
+    await fetchJson('/api/insert-record', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, role, password }),
+      body: JSON.stringify({
+        db_location: USERS_DB_LOCATION,
+        table_name: USERS_TABLE_NAME,
+        record: {
+          user_id: userId,
+          role,
+          password,
+        },
+      }),
     });
 
     createUserForm.reset();
-    showProfileMessage(result.message || 'user created', true);
+    showProfileMessage('user created', true);
     await loadUsers();
   } catch (error) {
     showProfileMessage(error.message, false);
@@ -167,13 +215,18 @@ async function handleUpdateRole() {
   }
 
   try {
-    const result = await fetchJson(`/api/users/${encodeURIComponent(profileState.selectedUserId)}/role`, {
-      method: 'PUT',
+    const result = await fetchJson('/api/update_record', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: selectedUserRoleInput.value }),
+      body: JSON.stringify({
+        db_location: USERS_DB_LOCATION,
+        table_name: USERS_TABLE_NAME,
+        updates: { role: selectedUserRoleInput.value },
+        criteria: { user_id: profileState.selectedUserId },
+      }),
     });
 
-    showProfileMessage(result.message || 'role updated', true);
+    showProfileMessage(result.updated_count ? 'role updated' : 'user not found', Boolean(result.updated_count));
     await loadUsers();
   } catch (error) {
     showProfileMessage(error.message, false);
@@ -186,15 +239,25 @@ async function handleUpdatePassword() {
     return;
   }
 
+  if (!selectedUserPasswordInput.value) {
+    showProfileMessage('Enter a new password first.', false);
+    return;
+  }
+
   try {
-    const result = await fetchJson(`/api/users/${encodeURIComponent(profileState.selectedUserId)}/password`, {
-      method: 'PUT',
+    const result = await fetchJson('/api/update_record', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: selectedUserPasswordInput.value }),
+      body: JSON.stringify({
+        db_location: USERS_DB_LOCATION,
+        table_name: USERS_TABLE_NAME,
+        updates: { password: selectedUserPasswordInput.value },
+        criteria: { user_id: profileState.selectedUserId },
+      }),
     });
 
     selectedUserPasswordInput.value = '';
-    showProfileMessage(result.message || 'password updated', true);
+    showProfileMessage(result.updated_count ? 'password updated' : 'user not found', Boolean(result.updated_count));
   } catch (error) {
     showProfileMessage(error.message, false);
   }
@@ -206,12 +269,23 @@ async function handleDeleteUser() {
     return;
   }
 
+  if (profileState.selectedUserId === profileState.currentUserId) {
+    showProfileMessage('cannot delete the active admin user', false);
+    return;
+  }
+
   try {
-    const result = await fetchJson(`/api/users/${encodeURIComponent(profileState.selectedUserId)}`, {
-      method: 'DELETE',
+    await fetchJson('/api/delete-record', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        db_location: USERS_DB_LOCATION,
+        table_name: USERS_TABLE_NAME,
+        criteria: { user_id: profileState.selectedUserId },
+      }),
     });
 
-    showProfileMessage(result.message || 'user deleted', true);
+    showProfileMessage('user deleted', true);
     setSelectedUser('');
     await loadUsers();
   } catch (error) {
