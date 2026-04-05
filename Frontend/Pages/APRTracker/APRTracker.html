@@ -4,21 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>APR Tracker</title>
+  <link rel="stylesheet" href="/static/Vendor/datatables/datatables.min.css" />
   <link rel="stylesheet" href="/static/Vendor/semantic-ui/semantic.min.css" />
   <link rel="stylesheet" href="/static/Pages/APRTracker/APRTracker.css" />
 </head>
 <body>
-  <div class="content-page-shell">
-    <div class="ui raised segment content-page-panel">
-      <h1 class="ui header">APR Tracker</h1>
-      <p class="content-page-copy">Use this tracker for day-to-day APR progress, issue ownership, and milestone tracking.</p>
-      <div class="ui three stackable cards content-page-cards">
-        <div class="card"><div class="content"><div class="header">Milestones</div><div class="description">Track APR milestones, deadlines, and status updates for each workstream.</div></div></div>
-        <div class="card"><div class="content"><div class="header">Owners</div><div class="description">Keep clear ownership for follow-ups, escalations, and approvals.</div></div></div>
-        <div class="card"><div class="content"><div class="header">Status</div><div class="description">Review what is on track, at risk, or blocked across the APR work.</div></div></div>
-      </div>
-    </div>
-  </div>
+  <table id="aprTrackerTable" class="display apr-tracker-table" style="width:100%"></table>
+  <script src="/static/Vendor/jquery/jquery.min.js"></script>
+  <script src="/static/Vendor/datatables/datatables.min.js"></script>
+  <script src="/static/AdvancedBuilders/AdvancedTable/AdvancedTable.js"></script>
   <script src="/static/Pages/APRTracker/APRTracker.js"></script>
 </body>
 </html>

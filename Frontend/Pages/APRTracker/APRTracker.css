@@ -4,6 +4,10 @@ body {
   margin: 0;
 }
 
+th.dt-body-right {
+    text-align: left !important;
+}
+
 body {
   font-family: Lato, 'Helvetica Neue', Arial, Helvetica, sans-serif;
   background: #f5f7fa;
@@ -30,4 +34,27 @@ body {
 
 .content-page-cards .description {
   color: rgba(0, 0, 0, 0.65);
+}
+
+.apr-tracker-table-panel {
+  margin-top: 1.5rem !important;
+  border-radius: 0.75rem !important;
+}
+
+.apr-tracker-table-header {
+  margin-bottom: 1rem;
+}
+
+.apr-tracker-table-copy {
+  margin: 0;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.apr-tracker-message.is-hidden {
+  display: none;
+}
+
+.apr-tracker-table {
+  width: 100%;
+  margin-top: 0.5rem !important;
 }

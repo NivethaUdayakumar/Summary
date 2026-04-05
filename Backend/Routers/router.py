@@ -64,6 +64,11 @@ def register_routes(app):
         data = request.get_json(silent=True) or {}
         return jsonify(table.query_table(data))
 
+    @app.route('/api/read-table', methods=['POST'])
+    def read_table_route():
+        data = request.get_json(silent=True) or {}
+        return jsonify(table.read_table(data))
+
     @app.route('/api/insert-record', methods=['POST'])
     def insert_record_route():
         data = request.get_json(silent=True) or {}

@@ -26,7 +26,6 @@ def role_allows_tab(role: str, tab_name: str) -> bool:
     allowed = ROLE_ALLOWED_TABS.get(role, [])
     return normalized in allowed
 
-
 def get_dashboard_tabs(role: str):
     allowed = ROLE_ALLOWED_TABS.get(role, [])
     return [
@@ -38,7 +37,6 @@ def get_dashboard_tabs(role: str):
         for tab_key in allowed
         if tab_key in TAB_DEFINITIONS
     ]
-
 
 def get_default_dashboard_tab(role: str):
     tabs = get_dashboard_tabs(role)
