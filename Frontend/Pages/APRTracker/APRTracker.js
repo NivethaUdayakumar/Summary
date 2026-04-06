@@ -39,7 +39,6 @@ const table = new TableBuilder({
     apiUrl: '/api/read-table',
     dbLocation: APR_TRACKER_DB_LOCATION,
     tableName: APR_TRACKER_TABLE_NAME,
-
     options: {
         paging: true,
         searching: true,
@@ -59,7 +58,6 @@ const table = new TableBuilder({
         fixedColumns: {
             left: 1
         },
-
         columns: [
             { data: 'item_code',  title: 'item_code',  name: 'item_code' },
             {
@@ -84,7 +82,6 @@ const table = new TableBuilder({
             { data: 'due_date',   title: 'due_date',   name: 'due_date' },
             { data: 'score',      title: 'score',      name: 'score' },
         ],
-
         columnDefs: [
             {
                 targets: '_all',
@@ -104,7 +101,6 @@ const table = new TableBuilder({
             }
         ]
     },
-
     extensions: {
         afterInit: function(dt, builder) {
             const tableEl = document.querySelector(builder.selector);
