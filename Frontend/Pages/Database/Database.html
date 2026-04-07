@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Database Manager</title>
+
+    <link rel="stylesheet" href="/static/Vendor/datatables/datatables.min.css" />
+    <link rel="stylesheet" href="/static/Vendor/semantic-ui/semantic.min.css" />
+    <link rel="stylesheet" href="/static/Pages/Database/Database.css" />
+</head>
+<body>
+    <div class="db-page">
+        <div class="left-pane">
+            <div class="panel compact">
+                <div class="panel-title">Database</div>
+
+                <div class="field-block">
+                    <label>Main DB Location</label>
+                    <div class="inline-row">
+                        <input type="text" id="dbPath" placeholder="AppData/App.db" />
+                        <button id="openDbBtn" class="ui primary button small">Open or Create</button>
+                    </div>
+                </div>
+
+                <div class="summary-grid">
+                    <div class="summary-card">
+                        <div class="summary-label">DB Path</div>
+                        <div class="summary-value" id="dbInfoPath"></div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="summary-label">Size</div>
+                        <div class="summary-value" id="dbInfoSize"></div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="summary-label">Tables</div>
+                        <div class="summary-value" id="dbInfoTableCount">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel compact">
+                <div class="panel-title">Schema Template</div>
+
+                <div class="inline-row">
+                    <input type="text" id="templateName" placeholder="template_name" />
+                    <button id="saveTemplateBtn" class="ui button small">Save Template</button>
+                </div>
+
+                <div class="inline-row">
+                    <select id="templateList"></select>
+                    <button id="listTemplatesBtn" class="ui button small">Refresh</button>
+                </div>
+
+                <div class="inline-row">
+                    <input type="text" id="newDbFromTemplatePath" placeholder="AppData/New.db" />
+                    <button id="createDbFromTemplateBtn" class="ui button small">Create DB</button>
+                </div>
+            </div>
+
+            <div class="panel compact">
+                <div class="panel-title">Tables</div>
+
+                <div class="inline-row">
+                    <input type="text" id="newTableName" placeholder="new_table" />
+                    <button id="createTableBtn" class="ui button small">Create</button>
+                    <button id="deleteTableBtn" class="ui red button small">Delete Current</button>
+                </div>
+
+                <div id="tableList" class="table-list"></div>
+            </div>
+
+            <div class="panel compact">
+                <div class="panel-title">Columns</div>
+
+                <div class="column-grid">
+                    <input type="text" id="newColumnName" placeholder="column_name" />
+
+                    <select id="newColumnType">
+                        <option value="TEXT">TEXT</option>
+                        <option value="INTEGER">INTEGER</option>
+                        <option value="REAL">REAL</option>
+                        <option value="NUMERIC">NUMERIC</option>
+                        <option value="BLOB">BLOB</option>
+                        <option value="DATE">DATE</option>
+                        <option value="DATETIME">DATETIME</option>
+                    </select>
+
+                    <label class="checkbox-line">
+                        <input type="checkbox" id="newColumnNotNull" />
+                        <span>NOT NULL</span>
+                    </label>
+
+                    <label class="checkbox-line">
+                        <input type="checkbox" id="newColumnPk" />
+                        <span>PRIMARY KEY</span>
+                    </label>
+
+                    <label class="checkbox-line">
+                        <input type="checkbox" id="newColumnAuto" />
+                        <span>AUTOINCREMENT</span>
+                    </label>
+
+                    <input type="text" id="newColumnDefault" placeholder="default value optional" />
+
+                    <button id="addColumnBtn" class="ui button small">Append Right</button>
+                </div>
+
+                <div class="inline-row top-gap">
+                    <select id="removeColumnSelect">
+                        <option value="">Select column to remove</option>
+                    </select>
+                    <button id="removeColumnBtn" class="ui red button small">Remove Column</button>
+                </div>
+            </div>
+
+            <div class="panel compact">
+                <div class="panel-title">Record Editor</div>
+
+                <div id="recordForm" class="record-form-grid"></div>
+
+                <div class="inline-row top-gap">
+                    <button id="insertRecordBtn" class="ui primary button small">Create Record</button>
+                    <button id="updateSelectedRowBtn" class="ui button small">Update Selected Row</button>
+                    <button id="clearRecordFormBtn" class="ui button small">Clear Form</button>
+                </div>
+            </div>
+
+            <div class="panel compact">
+                <div class="panel-title">Run Query</div>
+
+                <textarea id="queryText" placeholder="Run any SQL query"></textarea>
+
+                <div class="inline-row top-gap">
+                    <button id="runQueryBtn" class="ui button small">Run Query</button>
+                    <button id="reloadCurrentTableBtn" class="ui button small">Reload Current Table</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="center-pane">
+            <div class="panel full-height">
+                <div class="toolbar">
+                    <div class="toolbar-left">
+                        <span class="toolbar-title">Current Table</span>
+                        <span id="currentTableLabel" class="current-table">None</span>
+                    </div>
+
+                    <div class="toolbar-right">
+                        <button id="clearFiltersBtn" class="ui button small">Clear All Filters</button>
+                        <button id="deleteSelectedRowsBtn" class="ui red button small">Delete Selected Row(s)</button>
+                    </div>
+                </div>
+
+                <div class="table-wrap">
+                    <table id="mainDataTable" class="display nowrap" style="width:100%"></table>
+                </div>
+            </div>
+        </div>
+
+        <div class="right-pane">
+            <div class="panel datatype-panel">
+                <div class="panel-title">Data Type Guide</div>
+
+                <div class="datatype-grid">
+                    <div class="datatype-card">
+                        <div class="dtype-name">TEXT</div>
+                        <div class="dtype-desc">String data</div>
+                        <div class="dtype-example">alice, admin, open</div>
+                    </div>
+
+                    <div class="datatype-card">
+                        <div class="dtype-name">INTEGER</div>
+                        <div class="dtype-desc">Whole number</div>
+                        <div class="dtype-example">1, 25, 999</div>
+                    </div>
+
+                    <div class="datatype-card">
+                        <div class="dtype-name">REAL</div>
+                        <div class="dtype-desc">Decimal number</div>
+                        <div class="dtype-example">3.14, 19.95</div>
+                    </div>
+
+                    <div class="datatype-card">
+                        <div class="dtype-name">NUMERIC</div>
+                        <div class="dtype-desc">Numeric flexible storage</div>
+                        <div class="dtype-example">10, 10.5</div>
+                    </div>
+
+                    <div class="datatype-card">
+                        <div class="dtype-name">BLOB</div>
+                        <div class="dtype-desc">Binary content</div>
+                        <div class="dtype-example">bytes</div>
+                    </div>
+
+                    <div class="datatype-card">
+                        <div class="dtype-name">DATE</div>
+                        <div class="dtype-desc">Date text</div>
+                        <div class="dtype-example">2026/04/07</div>
+                    </div>
+
+                    <div class="datatype-card">
+                        <div class="dtype-name">DATETIME</div>
+                        <div class="dtype-desc">Date time text</div>
+                        <div class="dtype-example">2026/04/07 19:30:00</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel schema-panel">
+                <div class="panel-title">Schema Columns</div>
+
+                <div class="schema-table-wrap">
+                    <table id="schemaTable">
+                        <thead>
+                            <tr>
+                                <th>Column</th>
+                                <th>Type</th>
+                                <th>PK</th>
+                                <th>Auto</th>
+                                <th>Not Null</th>
+                                <th>Default</th>
+                            </tr>
+                        </thead>
+                        <tbody id="schemaTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/Vendor/jquery/jquery.min.js"></script>
+    <script src="/static/Vendor/datatables/datatables.min.js"></script>
+    <script src="/static/Pages/Database/Database.js"></script>
+</body>
+</html>

@@ -1,18 +1,77 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>APR Tracker</title>
-  <link rel="stylesheet" href="/static/Vendor/datatables/datatables.min.css" />
-  <link rel="stylesheet" href="/static/Vendor/semantic-ui/semantic.min.css" />
-  <link rel="stylesheet" href="/static/Pages/APRTracker/APRTracker.css" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>APR Tracker</title>
+
+    <link rel="stylesheet" href="/static/Pages/APRTracker/APRTracker.css" />
+    <link rel="stylesheet" href="/static/Vendor/datatables/datatables.min.css" />
+    <link rel="stylesheet" href="/static/Vendor/semantic-ui/semantic.min.css" />
+
+    <style>
+        body {
+            margin: 16px;
+            font-family: Arial, sans-serif;
+        }
+
+        .apr-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+
+        .apr-toolbar .item-label {
+            font-weight: 600;
+        }
+
+        .dt-actions {
+            white-space: nowrap;
+        }
+
+        .dt-actions .ui.button,
+        .dt-actions .ui.dropdown {
+            margin-right: 4px;
+        }
+
+        #aprTrackerTable {
+            width: 100%;
+        }
+    </style>
 </head>
 <body>
-  <table id="aprTrackerTable" class="display apr-tracker-table" style="width:100%"></table>
-  <script src="/static/Vendor/jquery/jquery.min.js"></script>
-  <script src="/static/Vendor/datatables/datatables.min.js"></script>
-  <script src="/static/AdvancedBuilders/AdvancedTable/AdvancedTable.js"></script>
-  <script src="/static/Pages/APRTracker/APRTracker.js"></script>
+
+    <div class="apr-toolbar">
+        <div class="item-label">Preset</div>
+        <select id="presetSelect" class="ui dropdown">
+            <option value="default">Default</option>
+            <option value="hideOwner">Hide Owner</option>
+            <option value="hideName">Hide Name</option>
+        </select>
+
+        <button id="clearFiltersBtn" class="ui button">Clear All Applied Filters</button>
+        <button id="reloadTableBtn" class="ui button">Reload</button>
+    </div>
+
+    <table id="aprTrackerTable" class="display nowrap"></table>
+
+    <script src="/static/Vendor/jquery/jquery.min.js"></script>
+    <script src="/static/Vendor/semantic-ui/semantic.min.js"></script>
+    <script src="/static/Vendor/datatables/datatables.min.js"></script>
+
+    <script src="/static/AdvancedBuilders/AdvancedTable/AdvancedTable.js"></script>
+
+    <script src="/static/Pages/APRTracker/Buttons/view.js"></script>
+    <script src="/static/Pages/APRTracker/Buttons/edit.js"></script>
+    <script src="/static/Pages/APRTracker/Buttons/delete.js"></script>
+    <script src="/static/Pages/APRTracker/Buttons/export.js"></script>
+    <script src="/static/Pages/APRTracker/Buttons/history.js"></script>
+
+    <script src="/static/Pages/APRTracker/actionsLoader.js"></script>
+    <script src="/static/Pages/APRTracker/columns.js"></script>
+    <script src="/static/Pages/APRTracker/presets.js"></script>
+    <script src="/static/Pages/APRTracker/APRTracker.js"></script>
 </body>
 </html>

@@ -1,0 +1,186 @@
+{
+  "tables": [
+    {
+      "table_name": "customers",
+      "columns": [
+        {
+          "cid": 0,
+          "name": "customer_id",
+          "type": "INTEGER",
+          "notnull": 0,
+          "default_value": null,
+          "pk": 1,
+          "autoincrement": true
+        },
+        {
+          "cid": 1,
+          "name": "customer_name",
+          "type": "TEXT",
+          "notnull": 1,
+          "default_value": null,
+          "pk": 0,
+          "autoincrement": false
+        },
+        {
+          "cid": 2,
+          "name": "segment",
+          "type": "TEXT",
+          "notnull": 1,
+          "default_value": null,
+          "pk": 0,
+          "autoincrement": false
+        },
+        {
+          "cid": 3,
+          "name": "country",
+          "type": "TEXT",
+          "notnull": 1,
+          "default_value": null,
+          "pk": 0,
+          "autoincrement": false
+        },
+        {
+          "cid": 4,
+          "name": "signup_date",
+          "type": "TEXT",
+          "notnull": 1,
+          "default_value": null,
+          "pk": 0,
+          "autoincrement": false
+        }
+      ]
+    },
+    {
+      "table_name": "order_items",
+      "columns": [
+        {
+          "cid": 0,
+          "name": "order_item_id",
+          "type": "INTEGER",
+          "notnull": 0,
+          "default_value": null,
+          "pk": 1,
+          "autoincrement": true
+        },
+        {
+          "cid": 1,
+          "name": "order_id",
+          "type": "INTEGER",
+          "notnull": 1,
+          "default_value": null,
+          "pk": 0,
+          "autoincrement": false
+        },
+        {
+          "cid": 2,
+          "name": "product_id",
+          "type": "INTEGER",
+          "notnull": 1,
+          "default_value": null,
+          "pk": 0,
+          "autoincrement": false
+        },
+        {
+          "cid": 3,
+          "name": "quantity",
+          "type": "INTEGER",
+          "notnull": 1,
+          "default_value": null,
+          "pk": 0,
+          "autoincrement": false
+        },
+        {
+          "cid": 4,
+          "name": "discount_pct",
+          "type": "REAL",
+          "notnull": 1,
+          "default_value": "0",
+          "pk": 0,
+          "autoincrement": false
+        }
+      ]
+    },
+    {
+      "table_name": "orders",
+      "columns": [
+        {
+          "cid": 0,
+          "name": "order_id",
+          "type": "INTEGER",
+          "notnull": 0,
+          "default_value": null,
+          "pk": 1,
+          "autoincrement": true
+        },
+        {
+          "cid": 1,
+          "name": "customer_id",
+          "type": "INTEGER",
+          "notnull": 1,
+          "default_value": null,
+          "pk": 0,
+          "autoincrement": false
+        },
+        {
+          "cid": 2,
+          "name": "order_date",
+          "type": "TEXT",
+          "notnull": 1,
+          "default_value": null,
+          "pk": 0,
+          "autoincrement": false
+        },
+        {
+          "cid": 3,
+          "name": "status",
+          "type": "TEXT",
+          "notnull": 1,
+          "default_value": null,
+          "pk": 0,
+          "autoincrement": false
+        }
+      ]
+    },
+    {
+      "table_name": "products",
+      "columns": [
+        {
+          "cid": 0,
+          "name": "product_id",
+          "type": "INTEGER",
+          "notnull": 0,
+          "default_value": null,
+          "pk": 1,
+          "autoincrement": true
+        },
+        {
+          "cid": 1,
+          "name": "product_name",
+          "type": "TEXT",
+          "notnull": 1,
+          "default_value": null,
+          "pk": 0,
+          "autoincrement": false
+        },
+        {
+          "cid": 2,
+          "name": "category",
+          "type": "TEXT",
+          "notnull": 1,
+          "default_value": null,
+          "pk": 0,
+          "autoincrement": false
+        },
+        {
+          "cid": 3,
+          "name": "unit_price",
+          "type": "REAL",
+          "notnull": 1,
+          "default_value": null,
+          "pk": 0,
+          "autoincrement": false
+        }
+      ]
+    }
+  ]
+}

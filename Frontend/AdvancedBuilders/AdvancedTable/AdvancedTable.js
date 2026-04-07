@@ -1,17 +1,10 @@
 class TableBuilder {
     constructor(config = {}) {
         this.selector = config.selector;
-        this.apiUrl = config.apiUrl || '/api/read-table';
-        this.dbLocation = config.dbLocation;
-        this.tableName = config.tableName;
-
-        this.fetchOptions = config.fetchOptions || {};
-        this.columns = config.columns || null;
-        this.transformResponse = config.transformResponse || null;
-
+        this.data = Array.isArray(config.data) ? config.data : [];
+        this.columns = config.columns || [];
         this.options = config.options || {};
         this.extensions = config.extensions || {};
-
         this.instance = null;
     }
 
@@ -44,46 +37,6 @@ class TableBuilder {
             this.instance = null;
         }
         this.clearTableElement();
-    }
-
-    async fetchTableData() {
-        if (!this.dbLocation || !this.tableName) {
-            return null;
-        }
-
-        const response = await fetch(this.apiUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                ...(this.fetchOptions.headers || {})
-            },
-            ...this.fetchOptions,
-            body: JSON.stringify({
-                db_location: this.dbLocation,
-                table_name: this.tableName,
-                ...(this.fetchOptions.body || {})
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
-        }
-
-        const result = await response.json();
-
-        if (!result.success) {
-            throw new Error(result.error || 'Failed to load table data');
-        }
-
-        return result;
-    }
-
-    buildColumnsFromApi(apiColumns) {
-        return apiColumns.map(col => ({
-            title: col.name,
-            data: col.name,
-            defaultContent: ''
-        }));
     }
 
     buildHeader(columns) {
@@ -166,7 +119,7 @@ class TableBuilder {
     applyExtensionSetup(columns) {
         if (!this.extensions) return;
 
-        if (this.extensions.columnTextFilters?.enabled) {
+        if (this.extensions.columnTextFilters && this.extensions.columnTextFilters.enabled) {
             const where = this.extensions.columnTextFilters.position || 'header';
             this.addColumnTextFilters(columns, where);
         }
@@ -175,7 +128,7 @@ class TableBuilder {
     applyExtensionBindings() {
         if (!this.extensions || !this.instance) return;
 
-        if (this.extensions.columnTextFilters?.enabled) {
+        if (this.extensions.columnTextFilters && this.extensions.columnTextFilters.enabled) {
             const where = this.extensions.columnTextFilters.position || 'header';
             this.bindColumnTextFilters(where);
         }
@@ -186,22 +139,11 @@ class TableBuilder {
     }
 
     async resolveData() {
-        let result = null;
-
-        if (typeof this.transformResponse === 'function') {
-            result = await this.transformResponse();
-        } else {
-            result = await this.fetchTableData();
-        }
-
-        if (!result) {
-            throw new Error('No data returned');
-        }
-
-        const columns = this.columns || this.buildColumnsFromApi(result.columns || []);
-        const data = result.rows || result.data || [];
-
-        return { columns, data, raw: result };
+        return {
+            columns: this.columns || [],
+            data: this.data || [],
+            raw: {}
+        };
     }
 
     async render() {
@@ -212,8 +154,11 @@ class TableBuilder {
         this.destroy();
         this.buildHeader(columns);
 
-        if (this.extensions.columnTextFilters?.enabled &&
-            this.extensions.columnTextFilters.position === 'footer') {
+        if (
+            this.extensions.columnTextFilters &&
+            this.extensions.columnTextFilters.enabled &&
+            this.extensions.columnTextFilters.position === 'footer'
+        ) {
             this.buildFooter(columns);
         }
 
@@ -236,9 +181,10 @@ class TableBuilder {
         return this.instance;
     }
 
-    async reload(dbLocation = null, tableName = null) {
-        if (dbLocation) this.dbLocation = dbLocation;
-        if (tableName) this.tableName = tableName;
+    async reload(data = null) {
+        if (Array.isArray(data)) {
+            this.data = data;
+        }
         return await this.render();
     }
 

@@ -4,6 +4,11 @@ body {
   margin: 0;
 }
 
+table.dataTable td,
+table.dataTable th {
+    border: 1px solid #9f9d9d !important;
+}
+
 th.dt-body-right {
     text-align: left !important;
 }

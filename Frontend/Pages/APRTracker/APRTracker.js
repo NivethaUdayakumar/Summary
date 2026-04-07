@@ -1,138 +1,216 @@
-const listDropdown = {
-    extend: 'dropdown',
-    content: [
-        'searchList',
-        'spacer',
-        'orderAsc',
-        'orderDesc',
-        'orderClear'
-    ]
-};
+(function () {
+    var APR_TRACKER_DB_LOCATION = 'AppData/App.db';
+    var APR_TRACKER_TABLE_NAME = 'apr-tracker';
 
-const dateDropdown = {
-    extend: 'dropdown',
-    content: [
-        'searchDateTime',
-        'spacer',
-        'orderAsc',
-        'orderDesc',
-        'orderClear'
-    ]
-};
+    var table = null;
 
-const floatDropdown = {
-    extend: 'dropdown',
-    content: [
-        'searchNumber',
-        'spacer',
-        'orderAsc',
-        'orderDesc',
-        'orderClear'
-    ]
-};
-
-const APR_TRACKER_DB_LOCATION = 'AppData/App.db';
-const APR_TRACKER_TABLE_NAME = 'apr-tracker';
-
-const table = new TableBuilder({
-    selector: '#aprTrackerTable',
-    apiUrl: '/api/read-table',
-    dbLocation: APR_TRACKER_DB_LOCATION,
-    tableName: APR_TRACKER_TABLE_NAME,
-    options: {
-        paging: true,
-        searching: true,
-        ordering: {
-            indicators: false,
-            handler: false
-        },
-        orderMulti: true,
-        info: true,
-        pageLength: 10,
-        lengthChange: true,
-        order: [[0, 'asc']],
-        autoWidth: false,
-        responsive: false,
-        stateSave: true,
-        scrollX: true,
-        fixedColumns: {
-            left: 1
-        },
-        columns: [
-            { data: 'item_code',  title: 'item_code',  name: 'item_code' },
-            {
-                data: null,
-                title: 'actions',
-                name: 'actions',
-                orderable: false,
-                searchable: false,
-                className: 'dt-actions',
-                render: function(data, type, row, meta) {
-                    return `
-                        <button class="btn-view" data-id="${row.item_code}">View</button>
-                        <button class="btn-edit" data-id="${row.item_code}">Edit</button>
-                        <button class="btn-delete" data-id="${row.item_code}">Delete</button>
-                    `;
-                }
-            },
-            { data: 'workstream', title: 'workstream', name: 'workstream' },
-            { data: 'milestone',  title: 'milestone',  name: 'milestone' },
-            { data: 'owner',      title: 'owner',      name: 'owner' },
-            { data: 'status',     title: 'status',     name: 'status' },
-            { data: 'due_date',   title: 'due_date',   name: 'due_date' },
-            { data: 'score',      title: 'score',      name: 'score' },
-        ],
-        columnDefs: [
-            {
-                targets: '_all',
-                defaultContent: ''
-            },
-            {
-                targets: ['workstream:name', 'owner:name', 'status:name'],
-                columnControl: ['order', listDropdown]
-            },
-            {
-                targets: ['due_date:name'],
-                columnControl: ['order', dateDropdown]
-            },
-            {
-                targets: ['score:name'],
-                columnControl: ['order', floatDropdown]
-            }
+    var listDropdown = {
+        extend: 'dropdown',
+        content: [
+            'searchList',
+            'spacer',
+            'orderAsc',
+            'orderDesc',
+            'orderClear'
         ]
-    },
-    extensions: {
-        afterInit: function(dt, builder) {
-            const tableEl = document.querySelector(builder.selector);
+    };
 
-            tableEl.addEventListener('click', function(event) {
-                const viewBtn = event.target.closest('.btn-view');
-                const editBtn = event.target.closest('.btn-edit');
-                const deleteBtn = event.target.closest('.btn-delete');
+    var dateDropdown = {
+        extend: 'dropdown',
+        content: [
+            'searchDateTime',
+            'spacer',
+            'orderAsc',
+            'orderDesc',
+            'orderClear'
+        ]
+    };
 
-                if (viewBtn) {
-                    const dt = table.getInstance();
-                    const tr = event.target.closest('tr');
-                    const rowData = dt.row(tr).data();
+    var floatDropdown = {
+        extend: 'dropdown',
+        content: [
+            'searchNumber',
+            'spacer',
+            'orderAsc',
+            'orderDesc',
+            'orderClear'
+        ]
+    };
 
-                    console.log('View row:', rowData);
-                }
+    function ensureSemanticDropdown() {
+        if (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.dropdown === 'function') {
+            window.jQuery('.ui.dropdown').dropdown();
+        }
+    }
 
-                if (editBtn) {
-                    const id = editBtn.dataset.id;
-                    console.log('Edit clicked:', id);
-                }
+    async function fetchAPRTrackerRows() {
+        var response = await fetch('/api/read-table', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                db_location: APR_TRACKER_DB_LOCATION,
+                table_name: APR_TRACKER_TABLE_NAME
+            })
+        });
 
-                if (deleteBtn) {
-                    const id = deleteBtn.dataset.id;
-                    console.log('Delete clicked:', id);
+        if (!response.ok) {
+            throw new Error('HTTP error ' + response.status);
+        }
+
+        var result = await response.json();
+
+        if (!result.success) {
+            throw new Error(result.error || 'Failed to load table data');
+        }
+
+        return result.rows || [];
+    }
+
+    function clearAllAppliedFilters() {
+        if (!table || !table.getInstance()) return;
+
+        var dt = table.getInstance();
+
+        // Clear global search
+        dt.search('');
+
+        // Clear normal per-column searches
+        dt.columns().search('');
+
+        // Clear ColumnControl searches such as searchList, searchText, date, float, etc
+        if (
+            dt.columns &&
+            dt.columns().columnControl &&
+            typeof dt.columns().columnControl.searchClear === 'function'
+        ) {
+            dt.columns().columnControl.searchClear();
+        }
+        // Fallback for older/alias API
+        else if (
+            dt.columns &&
+            typeof dt.columns().ccSearchClear === 'function'
+        ) {
+            dt.columns().ccSearchClear();
+        }
+
+        // Optional: reset ordering too
+        // dt.order([]);
+
+        // Clear saved state so filters do not come back after reload
+        if (dt.state && typeof dt.state.clear === 'function') {
+            dt.state.clear();
+        }
+
+        // Clear visible search inputs/selects in the wrapper
+        var wrapper = dt.table().container();
+
+        wrapper.querySelectorAll('input').forEach(function (input) {
+            if (
+                input.type === 'search' ||
+                input.type === 'text' ||
+                input.type === 'number' ||
+                input.type === 'date'
+            ) {
+                input.value = '';
+            }
+        });
+
+        wrapper.querySelectorAll('select').forEach(function (select) {
+            select.selectedIndex = 0;
+        });
+
+        // Redraw once at the end
+        dt.draw();
+        window.applyAPRTrackerPreset(table, document.getElementById('presetSelect').value);
+        ensureSemanticDropdown();
+        window.initAPRActionDropdowns();
+    }
+
+    function bindToolbar() {
+        var presetSelect = document.getElementById('presetSelect');
+        var clearFiltersBtn = document.getElementById('clearFiltersBtn');
+        var reloadTableBtn = document.getElementById('reloadTableBtn');
+
+        if (presetSelect) {
+            presetSelect.addEventListener('change', function () {
+                window.applyAPRTrackerPreset(table, this.value);
+            });
+        }
+
+        if (clearFiltersBtn) {
+            clearFiltersBtn.addEventListener('click', function () {
+                clearAllAppliedFilters();
+            });
+        }
+
+        if (reloadTableBtn) {
+            reloadTableBtn.addEventListener('click', async function () {
+                try {
+                    var rows = await fetchAPRTrackerRows();
+                    await table.reload(rows);
+                    window.applyAPRTrackerPreset(table, document.getElementById('presetSelect').value);
+                    ensureSemanticDropdown();
+                    window.initAPRActionDropdowns();
+                } catch (error) {
+                    console.error(error);
+                    alert(error.message);
                 }
             });
         }
     }
-});
 
-table.render().catch(error => {
-    console.error(error);
-    alert(error.message);
-});
+    async function initAPRTracker() {
+        ensureSemanticDropdown();
+
+        var rows = await fetchAPRTrackerRows();
+
+        table = new TableBuilder({
+            selector: '#aprTrackerTable',
+            data: rows,
+            columns: window.getAPRTrackerColumns(),
+            options: {
+                paging: true,
+                searching: true,
+                ordering: {
+                    indicators: false,
+                    handler: false
+                },
+                orderMulti: true,
+                info: true,
+                pageLength: 10,
+                lengthChange: true,
+                order: [[0, 'asc']],
+                autoWidth: true,
+                responsive: false,
+                stateSave: true,
+                scrollX: true,
+                fixedColumns: {
+                    left: 1
+                },
+                columnDefs: window.getAPRTrackerColumnDefs(listDropdown, dateDropdown, floatDropdown)
+            },
+            extensions: {
+                afterInit: function (dt, builder) {
+                    window.bindAPRActionEvents(builder);
+                    ensureSemanticDropdown();
+                    window.initAPRActionDropdowns();
+                }
+            }
+        });
+
+        await table.render();
+        bindToolbar();
+        window.applyAPRTrackerPreset(table, 'default');
+        ensureSemanticDropdown();
+        window.initAPRActionDropdowns();
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        initAPRTracker().catch(function (error) {
+            console.error(error);
+            alert(error.message);
+        });
+    });
+})();
