@@ -1,8 +1,8 @@
 from flask import jsonify, request
 from Backend.Routers.PageRoutes.database_routes import handle_database_route
 from Backend.Routers.PageRoutes import auth, manage_tab, python_exec, session as session_routes, table
-
-
+from Backend.Routers.PageRoutes.monitor import monitor_bp
+    
 def register_routes(app):
 
     # =========================
@@ -126,3 +126,8 @@ def register_routes(app):
         data = get_db_data() if request.method == 'POST' else get_db_args()
 
         return jsonify(handle_database_route(action, data))
+    
+    # ============================
+    # REGISTER BLUEPRINTS MONITOR
+    # ============================
+    app.register_blueprint(monitor_bp)

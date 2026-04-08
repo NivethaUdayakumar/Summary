@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF 8" />
+    <meta name="viewport" content="width=device width, initial scale 1.0" />
+    <title>Monitor</title>
+
+    <link rel="stylesheet" href="/static/Pages/Monitor/Monitor.css" />
+    <link rel="stylesheet" href="/static/Vendor/datatables/datatables.min.css" />
+    <link rel="stylesheet" href="/static/Vendor/semantic-ui/semantic.min.css" />
+</head>
+<body>
+    <div class="monitor_page">
+        <div class="monitor_header">
+            <h2 class="ui header">Monitor</h2>
+        </div>
+
+        <div class="monitor_layout">
+            <div class="left_panel">
+                <div class="ui segment">
+                    <div class="ui form">
+                        <div class="fields">
+                            <div class="five wide field">
+                                <label>Project</label>
+                                <select id="project_select" class="ui selection dropdown"></select>
+                            </div>
+
+                            <div class="five wide field">
+                                <label>Monitor Template</label>
+                                <select id="template_select" class="ui selection dropdown"></select>
+                            </div>
+
+                            <div class="six wide field action_field">
+                                <label>&nbsp;</label>
+                                <div class="ui buttons">
+                                    <button id="create_monitor_btn" class="ui primary button">Create</button>
+                                    <button id="refresh_monitors_btn" class="ui button">Refresh</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ui segment">
+                    <div class="table_title_row">
+                        <h4 class="ui header">Running Monitors</h4>
+                        <div id="selected_monitor_label" class="selected_monitor_label"></div>
+                    </div>
+
+                    <table id="monitors_table" class="ui celled table compact width_100">
+                        <thead>
+                            <tr>
+                                <th>Monitor</th>
+                                <th>Project</th>
+                                <th>Template</th>
+                                <th>Status</th>
+                                <th>PID</th>
+                                <th>CPU %</th>
+                                <th>MEM MB</th>
+                                <th>Last Log Time</th>
+                                <th>Last Log Message</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="right_panel">
+                <div class="ui segment">
+                    <div class="tracker_header_row">
+                        <h4 class="ui header">Tracker Data</h4>
+                        <div class="ui buttons small">
+                            <button id="hide_runs_btn" class="ui button">Hide Selected</button>
+                            <button id="unhide_runs_btn" class="ui button">Unhide Selected</button>
+                            <button id="update_runs_btn" class="ui button">Update Selected</button>
+                        </div>
+                    </div>
+
+                    <div id="tracker_meta" class="tracker_meta"></div>
+
+                    <table id="tracker_table" class="ui celled table compact width_100">
+                        <thead></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div id="message_box" class="ui message hidden"></div>
+    </div>
+
+    <script src="/static/Vendor/jquery/jquery.min.js"></script>
+    <script src="/static/Vendor/semantic-ui/semantic.min.js"></script>
+    <script src="/static/Vendor/datatables/datatables.min.js"></script>
+    <script src="/static/Pages/Monitor/Monitor.js"></script>
+</body>
+</html>

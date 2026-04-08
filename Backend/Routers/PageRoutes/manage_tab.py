@@ -12,11 +12,12 @@ TAB_DEFINITIONS = {
     'APRWeekly': {'label': 'APR Weekly', 'group': 'apr'},
     'APRWatchlist': {'label': 'APR Watchlist', 'group': 'apr'},
     'ProfileManager': {'label': 'Profile Manager', 'group': 'primary'},
+    'Monitor': {'label': 'Monitor', 'group': 'primary'},
     'Database': {'label': 'Database', 'group': 'primary'}
 }
 
 ROLE_ALLOWED_TABS = {
-    'admin': ['Menu', 'Login', 'Register', 'Dashboard', 'Summary', 'APRTracker', 'APRWeekly', 'APRWatchlist', 'ProfileManager', 'Database'],
+    'admin': ['Menu', 'Login', 'Register', 'Dashboard', 'Summary', 'APRTracker', 'APRWeekly', 'APRWatchlist', 'ProfileManager', 'Monitor', 'Database'],
     'user': ['Menu', 'Dashboard', 'Summary', 'APRTracker', 'APRWeekly', 'APRWatchlist'],
 }
 
