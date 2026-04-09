@@ -58,19 +58,6 @@ class MonitorService:
         return bool(re.fullmatch(r"[A-Za-z0-9_]+", value or ""))
 
     def list_projects(self):
-        """
-        Read project codes from:
-        Configurations/app.project.json
-
-        Example:
-        {
-            "project1": "Bond",
-            "project2": "Clover"
-        }
-
-        Returns:
-        ["project1", "project2"]
-        """
         if not APP_PROJECT_JSON.exists():
             return []
 
@@ -86,19 +73,6 @@ class MonitorService:
             return []
 
     def list_templates(self):
-        """
-        Template names are folder names under:
-        Backend/Monitor
-
-        Example folders:
-        APR
-        STA
-
-        Each template folder must contain:
-        <TemplateName>.py
-        Example:
-        Backend/Monitor/APR/APR.py
-        """
         templates = []
         if not BACKEND_MONITOR_DIR.exists():
             return templates
@@ -132,6 +106,9 @@ class MonitorService:
 
     def get_project_db_path(self, project_code: str):
         return PROJECTS_BASE_DIR / project_code / "DB" / f"{project_code}_DB.db"
+
+    def get_project_log_dir(self, project_code: str):
+        return PROJECTS_BASE_DIR / project_code / "Dashboard" / "Monitor_Logs"
 
     def create_monitor(self, project_code: str, template_name: str):
         if not self._safe_name(project_code):
@@ -334,32 +311,35 @@ class MonitorService:
         }
 
     def _get_latest_log(self, project_code: str, template_name: str):
-        db_path = self.get_project_db_path(project_code)
-        if not db_path.exists():
+        log_dir = self.get_project_log_dir(project_code)
+        if not log_dir.exists():
             return {"timestamp": "", "message": ""}
 
-        table_name = f"{template_name}_LOG"
+        log_files = sorted(log_dir.glob("monitor_*.log"), reverse=True)
+        if not log_files:
+            return {"timestamp": "", "message": ""}
+
+        latest_file = log_files[0]
 
         try:
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
+            with open(latest_file, "r", encoding="utf-8") as f:
+                lines = [line.strip() for line in f if line.strip()]
 
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
-            if not cur.fetchone():
-                conn.close()
+            if not lines:
                 return {"timestamp": "", "message": ""}
 
-            cur.execute(f'SELECT timestamp, message FROM "{table_name}" ORDER BY timestamp DESC LIMIT 1')
-            row = cur.fetchone()
-            conn.close()
+            last_line = lines[-1]
+            parts = last_line.split("|", 1)
 
-            if not row:
-                return {"timestamp": "", "message": ""}
+            if len(parts) == 2:
+                return {
+                    "timestamp": parts[0].strip(),
+                    "message": parts[1].strip()
+                }
 
             return {
-                "timestamp": row["timestamp"] or "",
-                "message": row["message"] or ""
+                "timestamp": "",
+                "message": last_line
             }
         except Exception:
             return {"timestamp": "", "message": ""}
@@ -435,7 +415,7 @@ class MonitorService:
 
         return output
 
-    def get_tracker_table_data(self, project_code: str, template_name: str):
+    def get_tracker_table_data(self, project_code: str, template_name: str, include_hidden: bool = False):
         if not self._safe_name(project_code):
             raise ValueError("Invalid project_code")
         if not self._safe_name(template_name):
@@ -460,7 +440,11 @@ class MonitorService:
         info = cur.fetchall()
         columns = [x["name"] for x in info]
 
-        cur.execute(f'SELECT * FROM "{table_name}"')
+        if include_hidden:
+            cur.execute(f'SELECT * FROM "{table_name}"')
+        else:
+            cur.execute(f'SELECT * FROM "{table_name}" WHERE hidden = 0')
+
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
 

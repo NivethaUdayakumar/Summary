@@ -4,6 +4,7 @@ let selectedMonitor = null;
 let trackerPrimaryKey = "";
 let trackerColumns = [];
 let autoRefreshHandle = null;
+let trackerViewMode = "visible"; // visible | hidden
 
 document.addEventListener("DOMContentLoaded", async function () {
     try {
@@ -37,11 +38,13 @@ function bindEvents() {
     });
 
     document.getElementById("project_select").addEventListener("change", async () => {
+        trackerViewMode = "visible";
         await refreshMonitors();
         await loadTrackerFromCurrentSelection();
     });
 
     document.getElementById("template_select").addEventListener("change", async () => {
+        trackerViewMode = "visible";
         await loadTrackerFromCurrentSelection();
     });
 
@@ -50,7 +53,7 @@ function bindEvents() {
     });
 
     document.getElementById("unhide_runs_btn").addEventListener("click", async () => {
-        await handleRunAction("unhide");
+        await handleUnhideFlow();
     });
 
     document.getElementById("update_runs_btn").addEventListener("click", async () => {
@@ -242,6 +245,7 @@ function bindMonitorRowEvents(rows) {
         if (!row) return;
 
         selectedMonitor = row;
+        trackerViewMode = "visible";
         updateSelectedMonitorLabel();
         await loadTrackerTable(row.project_code, row.template_name);
     });
@@ -277,6 +281,7 @@ function bindMonitorRowEvents(rows) {
             await apiPost("/api/monitor/terminate", { monitor_name });
             if (selectedMonitor && selectedMonitor.monitor_name === monitor_name) {
                 selectedMonitor = null;
+                trackerViewMode = "visible";
                 updateSelectedMonitorLabel();
                 clearTrackerTable();
             }
@@ -297,7 +302,8 @@ function updateSelectedMonitorLabel() {
         return;
     }
 
-    label.textContent = `Selected: ${selectedMonitor.monitor_name}`;
+    const modeText = trackerViewMode === "hidden" ? "Hidden Runs View" : "Visible Runs View";
+    label.textContent = `Selected: ${selectedMonitor.monitor_name} | ${modeText}`;
 }
 
 async function loadTrackerFromCurrentSelection() {
@@ -319,19 +325,33 @@ async function loadTrackerFromCurrentSelection() {
 
 async function loadTrackerTable(project_code, template_name) {
     try {
+        const include_hidden = trackerViewMode === "hidden" ? "1" : "0";
         const data = await apiGet(
-            `/api/monitor/tracker?project_code=${encodeURIComponent(project_code)}&template_name=${encodeURIComponent(template_name)}`
+            `/api/monitor/tracker?project_code=${encodeURIComponent(project_code)}&template_name=${encodeURIComponent(template_name)}&include_hidden=${include_hidden}`
         );
 
         const payload = data.data || {};
         trackerPrimaryKey = payload.primary_key || "";
         trackerColumns = payload.columns || [];
 
-        renderTrackerTable(payload.columns || [], payload.rows || [], project_code, template_name);
+        let rows = payload.rows || [];
+        rows = filterRowsForCurrentMode(rows);
+
+        renderTrackerTable(payload.columns || [], rows, project_code, template_name);
     } catch (err) {
         clearTrackerTable();
         showMessage(err.message, "negative");
     }
+}
+
+function filterRowsForCurrentMode(rows) {
+    if (!Array.isArray(rows)) return [];
+
+    if (trackerViewMode === "hidden") {
+        return rows.filter(row => Number(row.hidden || 0) === 1);
+    }
+
+    return rows.filter(row => Number(row.hidden || 0) === 0);
 }
 
 function clearTrackerTable() {
@@ -394,8 +414,10 @@ function renderTrackerTable(columns, rows, project_code, template_name) {
         stateSave: true
     });
 
+    const modeLabel = trackerViewMode === "hidden" ? "hidden only" : "visible only";
+
     document.getElementById("tracker_meta").textContent =
-        `Project: ${project_code} | Template: ${template_name} | Table: ${template_name}_Tracker | Key: ${trackerPrimaryKey}`;
+        `Project: ${project_code} | Template: ${template_name} | Table: ${template_name}_Tracker | Key: ${trackerPrimaryKey} | View: ${modeLabel}`;
 }
 
 function getSelectedRunIds() {
@@ -428,6 +450,44 @@ async function handleRunAction(action) {
         });
 
         showMessage(`${action} completed`, "positive");
+
+        if (action === "hide") {
+            trackerViewMode = "visible";
+        }
+
+        await loadTrackerTable(selectedMonitor.project_code, selectedMonitor.template_name);
+    } catch (err) {
+        showMessage(err.message, "negative");
+    }
+}
+
+async function handleUnhideFlow() {
+    if (!selectedMonitor) {
+        showMessage("Select a monitor row first", "warning");
+        return;
+    }
+
+    const run_ids = getSelectedRunIds();
+
+    if (!run_ids.length) {
+        trackerViewMode = "hidden";
+        updateSelectedMonitorLabel();
+        await loadTrackerTable(selectedMonitor.project_code, selectedMonitor.template_name);
+        showMessage("Hidden runs loaded. Select rows to unhide.", "info");
+        return;
+    }
+
+    try {
+        await apiPost("/api/monitor/hide_runs", {
+            project_code: selectedMonitor.project_code,
+            template_name: selectedMonitor.template_name,
+            run_ids,
+            action: "unhide"
+        });
+
+        showMessage("unhide completed", "positive");
+        trackerViewMode = "visible";
+        updateSelectedMonitorLabel();
         await loadTrackerTable(selectedMonitor.project_code, selectedMonitor.template_name);
     } catch (err) {
         showMessage(err.message, "negative");

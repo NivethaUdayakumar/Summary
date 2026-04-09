@@ -109,9 +109,9 @@ def monitor_list():
 def monitor_tracker():
     project_code = (request.args.get("project_code") or "").strip()
     template_name = (request.args.get("template_name") or "").strip()
-
+    include_hidden = request.args.get("include_hidden", "0") == "1"
     try:
-        data = service.get_tracker_table_data(project_code, template_name)
+        data = service.get_tracker_table_data(project_code, template_name, include_hidden=include_hidden)
         return jsonify({"ok": True, "data": data})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 400
