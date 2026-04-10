@@ -1,13 +1,14 @@
 let monitorsTable = null;
 let trackerTable = null;
 let selectedMonitor = null;
-let trackerPrimaryKey = "";
 let trackerColumns = [];
+let trackerIdColumns = ["Job", "Milestone", "Block", "Stage"];
 let autoRefreshHandle = null;
-let trackerViewMode = "visible"; // visible | hidden
+let trackerViewMode = "visible";
 
 document.addEventListener("DOMContentLoaded", async function () {
     try {
+        $(".ui.dropdown").dropdown();
         await loadProjects();
         await loadTemplates();
         bindEvents();
@@ -39,13 +40,16 @@ function bindEvents() {
 
     document.getElementById("project_select").addEventListener("change", async () => {
         trackerViewMode = "visible";
+        selectedMonitor = null;
+        updateSelectedMonitorLabel();
         await refreshMonitors();
         await loadTrackerFromCurrentSelection();
     });
 
     document.getElementById("template_select").addEventListener("change", async () => {
-        trackerViewMode = "visible";
-        await loadTrackerFromCurrentSelection();
+        if (!selectedMonitor) {
+            await loadTrackerFromCurrentSelection();
+        }
     });
 
     document.getElementById("hide_runs_btn").addEventListener("click", async () => {
@@ -112,6 +116,8 @@ async function loadProjects() {
         opt.textContent = project;
         select.appendChild(opt);
     }
+
+    $(".ui.dropdown").dropdown("refresh");
 }
 
 async function loadTemplates() {
@@ -123,10 +129,10 @@ async function loadTemplates() {
         const opt = document.createElement("option");
         opt.value = item.template_name;
         opt.textContent = item.template_name;
-        opt.dataset.has_hide_runs = item.has_hide_runs ? "1" : "0";
-        opt.dataset.has_update_run = item.has_update_run ? "1" : "0";
         select.appendChild(opt);
     }
+
+    $(".ui.dropdown").dropdown("refresh");
 }
 
 function getCurrentProject() {
@@ -163,15 +169,19 @@ async function refreshMonitors(resetSelection = false) {
 
     try {
         const data = await apiGet(url);
-        renderMonitorsTable(data.rows || []);
+        const rows = data.rows || [];
+
+        renderMonitorsTable(rows);
 
         if (resetSelection) {
             selectedMonitor = null;
             updateSelectedMonitorLabel();
         } else if (selectedMonitor) {
-            const updated = (data.rows || []).find(r => r.monitor_name === selectedMonitor.monitor_name);
+            const updated = rows.find(r => r.monitor_name === selectedMonitor.monitor_name);
             if (updated) {
                 selectedMonitor = updated;
+            } else {
+                selectedMonitor = null;
             }
             updateSelectedMonitorLabel();
         }
@@ -194,6 +204,7 @@ function renderMonitorsTable(rows) {
     rows.forEach((row) => {
         const tr = document.createElement("tr");
         tr.dataset.monitor_name = row.monitor_name;
+
         tr.innerHTML = `
             <td>${escapeHtml(row.monitor_name)}</td>
             <td>${escapeHtml(row.project_code)}</td>
@@ -212,6 +223,7 @@ function renderMonitorsTable(rows) {
                 </div>
             </td>
         `;
+
         tbody.appendChild(tr);
     });
 
@@ -251,8 +263,10 @@ function bindMonitorRowEvents(rows) {
     });
 
     $("#monitors_table tbody").off("click", ".start_btn");
-    $("#monitors_table tbody").on("click", ".start_btn", async function () {
+    $("#monitors_table tbody").on("click", ".start_btn", async function (e) {
+        e.stopPropagation();
         const monitor_name = this.getAttribute("data_name");
+
         try {
             await apiPost("/api/monitor/start", { monitor_name });
             showMessage(`Started ${monitor_name}`, "positive");
@@ -263,8 +277,10 @@ function bindMonitorRowEvents(rows) {
     });
 
     $("#monitors_table tbody").off("click", ".restart_btn");
-    $("#monitors_table tbody").on("click", ".restart_btn", async function () {
+    $("#monitors_table tbody").on("click", ".restart_btn", async function (e) {
+        e.stopPropagation();
         const monitor_name = this.getAttribute("data_name");
+
         try {
             await apiPost("/api/monitor/restart", { monitor_name });
             showMessage(`Restarted ${monitor_name}`, "positive");
@@ -275,16 +291,20 @@ function bindMonitorRowEvents(rows) {
     });
 
     $("#monitors_table tbody").off("click", ".terminate_btn");
-    $("#monitors_table tbody").on("click", ".terminate_btn", async function () {
+    $("#monitors_table tbody").on("click", ".terminate_btn", async function (e) {
+        e.stopPropagation();
         const monitor_name = this.getAttribute("data_name");
+
         try {
             await apiPost("/api/monitor/terminate", { monitor_name });
+
             if (selectedMonitor && selectedMonitor.monitor_name === monitor_name) {
                 selectedMonitor = null;
                 trackerViewMode = "visible";
                 updateSelectedMonitorLabel();
                 clearTrackerTable();
             }
+
             showMessage(`Terminated ${monitor_name}`, "positive");
             await refreshMonitors();
         } catch (err) {
@@ -325,19 +345,24 @@ async function loadTrackerFromCurrentSelection() {
 
 async function loadTrackerTable(project_code, template_name) {
     try {
-        const include_hidden = trackerViewMode === "hidden" ? "1" : "0";
         const data = await apiGet(
-            `/api/monitor/tracker?project_code=${encodeURIComponent(project_code)}&template_name=${encodeURIComponent(template_name)}&include_hidden=${include_hidden}`
+            `/api/monitor/tracker?project_code=${encodeURIComponent(project_code)}&template_name=${encodeURIComponent(template_name)}`
         );
 
         const payload = data.data || {};
-        trackerPrimaryKey = payload.primary_key || "";
         trackerColumns = payload.columns || [];
+        trackerIdColumns = payload.id_columns || ["Job", "Milestone", "Block", "Stage"];
 
         let rows = payload.rows || [];
         rows = filterRowsForCurrentMode(rows);
 
-        renderTrackerTable(payload.columns || [], rows, project_code, template_name);
+        renderTrackerTable(
+            payload.columns || [],
+            rows,
+            project_code,
+            template_name,
+            payload.table_name || `${template_name}_Tracker`
+        );
     } catch (err) {
         clearTrackerTable();
         showMessage(err.message, "negative");
@@ -347,11 +372,15 @@ async function loadTrackerTable(project_code, template_name) {
 function filterRowsForCurrentMode(rows) {
     if (!Array.isArray(rows)) return [];
 
-    if (trackerViewMode === "hidden") {
-        return rows.filter(row => Number(row.hidden || 0) === 1);
+    if (!trackerColumns.includes("Hidden")) {
+        return rows;
     }
 
-    return rows.filter(row => Number(row.hidden || 0) === 0);
+    if (trackerViewMode === "hidden") {
+        return rows.filter(row => Number(row.Hidden || 0) === 1);
+    }
+
+    return rows.filter(row => Number(row.Hidden || 0) === 0);
 }
 
 function clearTrackerTable() {
@@ -368,7 +397,7 @@ function clearTrackerTable() {
     if (meta) meta.textContent = "";
 }
 
-function renderTrackerTable(columns, rows, project_code, template_name) {
+function renderTrackerTable(columns, rows, project_code, template_name, tableName) {
     clearTrackerTable();
 
     const thead = document.querySelector("#tracker_table thead");
@@ -387,15 +416,19 @@ function renderTrackerTable(columns, rows, project_code, template_name) {
 
     thead.appendChild(headerRow);
 
-    rows.forEach((row, index) => {
+    rows.forEach((row) => {
         const tr = document.createElement("tr");
-        const pkValue = row[trackerPrimaryKey] ?? row[columns[0]] ?? index;
+        const rowIdentity = {};
 
-        let html = `<td><input type="checkbox" class="tracker_checkbox" data_run_id="${escapeHtml(String(pkValue))}"></td>`;
+        trackerIdColumns.forEach(col => {
+            rowIdentity[col] = row[col] == null ? "" : String(row[col]);
+        });
+
+        let html = `<td><input type="checkbox" class="tracker_checkbox" data_run_row='${escapeHtmlAttr(JSON.stringify(rowIdentity))}'></td>`;
 
         columns.forEach(col => {
             const value = row[col] == null ? "" : String(row[col]);
-            html += `<td title="${escapeHtml(value)}">${escapeHtml(value)}</td>`;
+            html += `<td title="${escapeHtmlAttr(value)}">${escapeHtml(value)}</td>`;
         });
 
         tr.innerHTML = html;
@@ -417,26 +450,32 @@ function renderTrackerTable(columns, rows, project_code, template_name) {
     const modeLabel = trackerViewMode === "hidden" ? "hidden only" : "visible only";
 
     document.getElementById("tracker_meta").textContent =
-        `Project: ${project_code} | Template: ${template_name} | Table: ${template_name}_Tracker | Key: ${trackerPrimaryKey} | View: ${modeLabel}`;
+        `Project: ${project_code} | Template: ${template_name} | DB: /proj/${project_code}/DashAI/DashAI_${template_name}.db | Table: ${tableName} | Row ID: ${trackerIdColumns.join(", ")} | View: ${modeLabel}`;
 }
 
-function getSelectedRunIds() {
-    const ids = [];
+function getSelectedRunRows() {
+    const rows = [];
+
     document.querySelectorAll(".tracker_checkbox:checked").forEach(cb => {
-        ids.push(cb.getAttribute("data_run_id"));
+        try {
+            rows.push(JSON.parse(cb.getAttribute("data_run_row")));
+        } catch (err) {
+            console.error(err);
+        }
     });
-    return ids;
+
+    return rows;
 }
 
 async function handleRunAction(action) {
-    const run_ids = getSelectedRunIds();
+    const run_rows = getSelectedRunRows();
 
     if (!selectedMonitor) {
         showMessage("Select a monitor row first", "warning");
         return;
     }
 
-    if (!run_ids.length) {
+    if (!run_rows.length) {
         showMessage("Select tracker rows first", "warning");
         return;
     }
@@ -445,16 +484,17 @@ async function handleRunAction(action) {
         await apiPost("/api/monitor/hide_runs", {
             project_code: selectedMonitor.project_code,
             template_name: selectedMonitor.template_name,
-            run_ids,
+            run_rows,
             action
         });
 
-        showMessage(`${action} completed`, "positive");
+        showMessage(`${action} queued`, "positive");
 
         if (action === "hide") {
             trackerViewMode = "visible";
         }
 
+        updateSelectedMonitorLabel();
         await loadTrackerTable(selectedMonitor.project_code, selectedMonitor.template_name);
     } catch (err) {
         showMessage(err.message, "negative");
@@ -467,13 +507,13 @@ async function handleUnhideFlow() {
         return;
     }
 
-    const run_ids = getSelectedRunIds();
+    const run_rows = getSelectedRunRows();
 
-    if (!run_ids.length) {
+    if (!run_rows.length) {
         trackerViewMode = "hidden";
         updateSelectedMonitorLabel();
         await loadTrackerTable(selectedMonitor.project_code, selectedMonitor.template_name);
-        showMessage("Hidden runs loaded. Select rows to unhide.", "info");
+        showMessage("Hidden runs loaded. Select rows to add back.", "info");
         return;
     }
 
@@ -481,11 +521,11 @@ async function handleUnhideFlow() {
         await apiPost("/api/monitor/hide_runs", {
             project_code: selectedMonitor.project_code,
             template_name: selectedMonitor.template_name,
-            run_ids,
+            run_rows,
             action: "unhide"
         });
 
-        showMessage("unhide completed", "positive");
+        showMessage("unhide queued", "positive");
         trackerViewMode = "visible";
         updateSelectedMonitorLabel();
         await loadTrackerTable(selectedMonitor.project_code, selectedMonitor.template_name);
@@ -495,14 +535,14 @@ async function handleUnhideFlow() {
 }
 
 async function handleUpdateRuns() {
-    const run_ids = getSelectedRunIds();
+    const run_rows = getSelectedRunRows();
 
     if (!selectedMonitor) {
         showMessage("Select a monitor row first", "warning");
         return;
     }
 
-    if (!run_ids.length) {
+    if (!run_rows.length) {
         showMessage("Select tracker rows first", "warning");
         return;
     }
@@ -511,10 +551,10 @@ async function handleUpdateRuns() {
         await apiPost("/api/monitor/update_runs", {
             project_code: selectedMonitor.project_code,
             template_name: selectedMonitor.template_name,
-            run_ids
+            run_rows
         });
 
-        showMessage("Update run completed", "positive");
+        showMessage("Update queued", "positive");
         await loadTrackerTable(selectedMonitor.project_code, selectedMonitor.template_name);
     } catch (err) {
         showMessage(err.message, "negative");
@@ -522,6 +562,13 @@ async function handleUpdateRuns() {
 }
 
 function escapeHtml(value) {
+    return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+}
+
+function escapeHtmlAttr(value) {
     return String(value)
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")

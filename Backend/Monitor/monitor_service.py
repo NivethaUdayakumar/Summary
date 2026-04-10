@@ -6,6 +6,7 @@ import time
 import sqlite3
 import signal
 import subprocess
+import importlib.util
 from pathlib import Path
 from datetime import datetime
 
@@ -82,7 +83,6 @@ class MonitorService:
                 continue
 
             template_name = folder.name
-
             if template_name.startswith("__"):
                 continue
 
@@ -93,9 +93,10 @@ class MonitorService:
             templates.append({
                 "template_name": template_name,
                 "script_path": str(main_script),
-                "has_hide_runs": (folder / f"{template_name}_Hide_Runs.py").exists(),
-                "has_update_run": (folder / f"{template_name}_Update_Run.py").exists()
+                "has_hide_runs": True,
+                "has_update_run": True
             })
+
         return sorted(templates, key=lambda x: x["template_name"])
 
     def _get_template_info(self, template_name: str):
@@ -104,11 +105,42 @@ class MonitorService:
                 return item
         return None
 
-    def get_project_db_path(self, project_code: str):
-        return PROJECTS_BASE_DIR / project_code / "DB" / f"{project_code}_DB.db"
+    def _get_template_dir(self, template_name: str):
+        return BACKEND_MONITOR_DIR / template_name
 
-    def get_project_log_dir(self, project_code: str):
-        return PROJECTS_BASE_DIR / project_code / "Dashboard" / "Monitor_Logs"
+    def get_project_db_path(self, project_code: str, template_name: str):
+        return PROJECTS_BASE_DIR / project_code / "DashAI" / f"DashAI_{template_name}.db"
+
+    def get_project_log_dir(self, project_code: str, template_name: str):
+        return PROJECTS_BASE_DIR / project_code / "DashAI" / f"Logs{template_name}"
+
+    def _load_python_module(self, module_path: Path, module_name: str):
+        if not module_path.exists():
+            raise FileNotFoundError(f"Module not found: {module_path}")
+
+        spec = importlib.util.spec_from_file_location(module_name, str(module_path))
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Unable to load module: {module_path}")
+
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def _load_template_modules(self, template_name: str):
+        template_dir = self._get_template_dir(template_name)
+        db_ops_path = template_dir / f"{template_name}_DB_Operations.py"
+        defs_path = template_dir / f"{template_name}_Definitions.py"
+
+        db_ops = self._load_python_module(db_ops_path, f"{template_name}_db_ops")
+        defs = self._load_python_module(defs_path, f"{template_name}_defs")
+        return db_ops, defs
+
+    def _make_state_key(self, defs_module, job: str, milestone: str, block: str, stage: str):
+        if hasattr(defs_module, "make_key"):
+            return defs_module.make_key(job, milestone, block, stage)
+        if hasattr(defs_module, "make_state_key"):
+            return defs_module.make_state_key(job, milestone, block, stage)
+        return f"{job}-{milestone}-{block}-{stage}"
 
     def create_monitor(self, project_code: str, template_name: str):
         if not self._safe_name(project_code):
@@ -235,7 +267,7 @@ class MonitorService:
                 except Exception:
                     pass
 
-            gone, alive = psutil.wait_procs(children, timeout=2)
+            _, alive = psutil.wait_procs(children, timeout=2)
             for child in alive:
                 try:
                     child.kill()
@@ -311,11 +343,11 @@ class MonitorService:
         }
 
     def _get_latest_log(self, project_code: str, template_name: str):
-        log_dir = self.get_project_log_dir(project_code)
+        log_dir = self.get_project_log_dir(project_code, template_name)
         if not log_dir.exists():
             return {"timestamp": "", "message": ""}
 
-        log_files = sorted(log_dir.glob("monitor_*.log"), reverse=True)
+        log_files = sorted(log_dir.glob("*.log"), reverse=True)
         if not log_files:
             return {"timestamp": "", "message": ""}
 
@@ -378,7 +410,6 @@ class MonitorService:
         rows = cur.fetchall()
         conn.close()
 
-        template_map = {x["template_name"]: x for x in self.list_templates()}
         output = []
 
         for row in rows:
@@ -393,7 +424,6 @@ class MonitorService:
 
             stats = self._get_process_stats(pid)
             latest_log = self._get_latest_log(row["project_code"], row["template_name"])
-            template_info = template_map.get(row["template_name"], {})
 
             output.append({
                 "monitor_name": row["monitor_name"],
@@ -409,23 +439,28 @@ class MonitorService:
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "last_started_at": row["last_started_at"] or "",
-                "has_hide_runs": bool(template_info.get("has_hide_runs")),
-                "has_update_run": bool(template_info.get("has_update_run"))
+                "has_hide_runs": True,
+                "has_update_run": True
             })
 
         return output
 
-    def get_tracker_table_data(self, project_code: str, template_name: str, include_hidden: bool = False):
+    def get_tracker_table_data(self, project_code: str, template_name: str):
         if not self._safe_name(project_code):
             raise ValueError("Invalid project_code")
         if not self._safe_name(template_name):
             raise ValueError("Invalid template_name")
 
-        db_path = self.get_project_db_path(project_code)
-        if not db_path.exists():
-            return {"columns": [], "rows": [], "primary_key": ""}
-
+        db_path = self.get_project_db_path(project_code, template_name)
         table_name = f"{template_name}_Tracker"
+
+        if not db_path.exists():
+            return {
+                "columns": [],
+                "rows": [],
+                "table_name": table_name,
+                "id_columns": ["Job", "Milestone", "Block", "Stage"]
+            }
 
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
@@ -434,61 +469,82 @@ class MonitorService:
         cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
         if not cur.fetchone():
             conn.close()
-            return {"columns": [], "rows": [], "primary_key": ""}
+            return {
+                "columns": [],
+                "rows": [],
+                "table_name": table_name,
+                "id_columns": ["Job", "Milestone", "Block", "Stage"]
+            }
 
         cur.execute(f'PRAGMA table_info("{table_name}")')
         info = cur.fetchall()
         columns = [x["name"] for x in info]
 
-        if include_hidden:
-            cur.execute(f'SELECT * FROM "{table_name}"')
-        else:
-            cur.execute(f'SELECT * FROM "{table_name}" WHERE hidden = 0')
-
+        cur.execute(f'SELECT * FROM "{table_name}"')
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
-
-        primary_key = ""
-        for col in info:
-            if col["pk"] == 1:
-                primary_key = col["name"]
-                break
-        if not primary_key and columns:
-            primary_key = columns[0]
 
         return {
             "columns": columns,
             "rows": rows,
-            "primary_key": primary_key
+            "table_name": table_name,
+            "id_columns": ["Job", "Milestone", "Block", "Stage"]
         }
 
-    def _run_script(self, script_path: Path, args):
-        if not script_path.exists():
-            raise FileNotFoundError(f"Script not found: {script_path}")
+    def _queue_template_action(self, project_code: str, template_name: str, run_rows, action_name: str):
+        if not self._safe_name(project_code):
+            raise ValueError("Invalid project_code")
+        if not self._safe_name(template_name):
+            raise ValueError("Invalid template_name")
 
-        cmd = [sys.executable, str(script_path)] + args
-        result = subprocess.run(
-            cmd,
-            cwd=str(ROOT_DIR),
-            capture_output=True,
-            text=True
-        )
+        db_ops, defs = self._load_template_modules(template_name)
+        db_file = self.get_project_db_path(project_code, template_name)
 
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Script failed")
+        if not db_file.exists():
+            raise FileNotFoundError(f"DB not found: {db_file}")
+
+        if not hasattr(db_ops, "connect_db_file"):
+            raise AttributeError(f"{template_name}_DB_Operations.py is missing connect_db_file()")
+
+        conn = db_ops.connect_db_file(str(db_file))
+
+        queued = 0
+        try:
+            for row in run_rows:
+                job = str(row.get("Job", "")).strip()
+                milestone = str(row.get("Milestone", "")).strip()
+                block = str(row.get("Block", "")).strip()
+                stage = str(row.get("Stage", "")).strip()
+
+                if not all([job, milestone, block, stage]):
+                    continue
+
+                state_key = self._make_state_key(defs, job, milestone, block, stage)
+
+                if action_name == "hide":
+                    db_ops.request_remove(conn, state_key)
+                elif action_name == "unhide":
+                    db_ops.request_add_back(conn, state_key)
+                elif action_name == "update":
+                    db_ops.request_reupdate(conn, state_key)
+                else:
+                    raise ValueError("Invalid action")
+
+                queued += 1
+        finally:
+            conn.close()
 
         return {
-            "stdout": result.stdout.strip(),
-            "stderr": result.stderr.strip()
+            "queued": queued,
+            "action": action_name,
+            "project_code": project_code,
+            "template_name": template_name
         }
 
-    def hide_or_unhide_runs(self, project_code: str, template_name: str, run_ids, action: str):
+    def hide_or_unhide_runs(self, project_code: str, template_name: str, run_rows, action: str):
         if action not in {"hide", "unhide"}:
             raise ValueError("Invalid action")
+        return self._queue_template_action(project_code, template_name, run_rows, action)
 
-        script_path = BACKEND_MONITOR_DIR / template_name / f"{template_name}_Hide_Runs.py"
-        return self._run_script(script_path, [project_code, action, json.dumps(run_ids)])
-
-    def update_runs(self, project_code: str, template_name: str, run_ids):
-        script_path = BACKEND_MONITOR_DIR / template_name / f"{template_name}_Update_Run.py"
-        return self._run_script(script_path, [project_code, json.dumps(run_ids)])
+    def update_runs(self, project_code: str, template_name: str, run_rows):
+        return self._queue_template_action(project_code, template_name, run_rows, "update")

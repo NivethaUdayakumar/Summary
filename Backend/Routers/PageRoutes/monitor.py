@@ -29,18 +29,12 @@ def monitor_js():
 
 @monitor_bp.route("/api/monitor/projects", methods=["GET"])
 def monitor_projects():
-    return jsonify({
-        "ok": True,
-        "projects": service.list_projects()
-    })
+    return jsonify({"ok": True, "projects": service.list_projects()})
 
 
 @monitor_bp.route("/api/monitor/templates", methods=["GET"])
 def monitor_templates():
-    return jsonify({
-        "ok": True,
-        "templates": service.list_templates()
-    })
+    return jsonify({"ok": True, "templates": service.list_templates()})
 
 
 @monitor_bp.route("/api/monitor/create", methods=["POST"])
@@ -109,9 +103,9 @@ def monitor_list():
 def monitor_tracker():
     project_code = (request.args.get("project_code") or "").strip()
     template_name = (request.args.get("template_name") or "").strip()
-    include_hidden = request.args.get("include_hidden", "0") == "1"
+
     try:
-        data = service.get_tracker_table_data(project_code, template_name, include_hidden=include_hidden)
+        data = service.get_tracker_table_data(project_code, template_name)
         return jsonify({"ok": True, "data": data})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 400
@@ -122,11 +116,11 @@ def monitor_hide_runs():
     data = request.get_json(force=True)
     project_code = (data.get("project_code") or "").strip()
     template_name = (data.get("template_name") or "").strip()
-    run_ids = data.get("run_ids") or []
+    run_rows = data.get("run_rows") or []
     action = (data.get("action") or "hide").strip()
 
     try:
-        result = service.hide_or_unhide_runs(project_code, template_name, run_ids, action)
+        result = service.hide_or_unhide_runs(project_code, template_name, run_rows, action)
         return jsonify({"ok": True, "data": result})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 400
@@ -137,10 +131,10 @@ def monitor_update_runs():
     data = request.get_json(force=True)
     project_code = (data.get("project_code") or "").strip()
     template_name = (data.get("template_name") or "").strip()
-    run_ids = data.get("run_ids") or []
+    run_rows = data.get("run_rows") or []
 
     try:
-        result = service.update_runs(project_code, template_name, run_ids)
+        result = service.update_runs(project_code, template_name, run_rows)
         return jsonify({"ok": True, "data": result})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 400

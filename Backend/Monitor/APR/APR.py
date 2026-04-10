@@ -1,259 +1,135 @@
-import signal
+import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
-from pathlib import Path
 
-from APR_Add_Record import Add_record
-from APR_Get_File_Status import Get_file_status
-from APR_Get_Monitor_Files import Get_monitor_files
-from APR_Get_Record_ID import Get_record_id
-from APR_Get_Values_For_Record import Get_values_for_record
-from APR_Update_Record import Update_record
-from APR_Config import (
-    DATA_TABLE,
-    STATE_TABLE,
-    STATE_TABLE_COLUMNS,
-    LOG_RETENTION_DAYS,
-    POLL_INTERVAL_SECONDS,
-    get_project_paths,
+import APR_DB_Operations
+import APR_Utils
+from APR_Definitions import (
+    LOG_DIR,
+    POLL_SECONDS,
+    STATE_AWAIT,
+    STATE_DONE,
+    STATE_EXTRACT_FAILED,
+    today_log_file,
+    now_str,
 )
-from APR_Data_Processing_Code import data_processing_code
-from APR_DB_Common import get_conn, utc_now_str
-from APR_Init_Databases import init_databases
 
 
-STOP = False
-
-
-def stop_handler(signum, frame):
-    global STOP
-    STOP = True
-
-
-signal.signal(signal.SIGINT, stop_handler)
-signal.signal(signal.SIGTERM, stop_handler)
-
-
-def ensure_log_dir(log_dir: Path):
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-
-def cleanup_old_logs(log_dir: Path):
-    ensure_log_dir(log_dir)
-    cutoff = datetime.now() - timedelta(days=LOG_RETENTION_DAYS)
-
-    for path in log_dir.glob("monitor_*.log"):
-        try:
-            stem_date = path.stem.replace("monitor_", "")
-            file_date = datetime.strptime(stem_date, "%Y%m%d")
-            if file_date < cutoff:
-                path.unlink(missing_ok=True)
-        except Exception:
-            continue
-
-
-def write_log_line(log_dir: Path, processed: int, completed: int, remaining: int):
-    ensure_log_dir(log_dir)
-    today = datetime.now().strftime("%Y%m%d")
-    log_file = log_dir / f"monitor_{today}.log"
-    line = (
-        f"{utc_now_str()} | Runs processed: {processed} | "
-        f"Runs Completed: {completed} | Runs remaining: {remaining}\n"
-    )
-    with open(log_file, "a", encoding="utf-8") as f:
-        f.write(line)
-
-
-def upsert_state(state_db: str, project_code: str, filepath: str, record_key: str | None, last_status: str, is_hidden: int):
-    now = utc_now_str()
-    insert_cols = ", ".join(STATE_TABLE_COLUMNS)
-    placeholders = ", ".join(["?"] * len(STATE_TABLE_COLUMNS))
-
-    values = (
-        filepath,
-        record_key,
-        project_code,
-        0,
-        is_hidden,
-        last_status,
-        now,
-        now,
-        now,
-        None,
-    )
-
-    with get_conn(state_db) as conn:
-        conn.execute(
-            f"""
-            INSERT INTO "{STATE_TABLE}" ({insert_cols})
-            VALUES ({placeholders})
-            ON CONFLICT(filepath) DO UPDATE SET
-                record_key = excluded.record_key,
-                project_code = excluded.project_code,
-                is_hidden = excluded.is_hidden,
-                last_status = excluded.last_status,
-                last_seen_at = excluded.last_seen_at,
-                last_processed_at = excluded.last_processed_at
-            """,
-            values,
+def write_iter_log(path, to_extract, completed, remaining):
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(
+            f"{now_str()} | To_Extract_This_Iteration = {to_extract} | "
+            f"Completed_Extract_This_Iteration = {completed} | "
+            f"Remaining_Extract_This_Iteration = {remaining}\n"
         )
-        conn.commit()
-
-
-def get_existing_record_by_key(data_db: str, record_key: str):
-    with get_conn(data_db) as conn:
-        row = conn.execute(
-            f'''
-            SELECT id, record_key, filepath, status, file_size, modified_time, hidden
-            FROM "{DATA_TABLE}"
-            WHERE record_key = ?
-            ''',
-            (record_key,),
-        ).fetchone()
-        return dict(row) if row else None
-
-
-def build_update_values(project_code: str, filepath: str, status: str, hidden: int):
-    columns_tuple, values_tuple = Get_values_for_record(project_code, filepath, status=status, hidden=hidden)
-
-    update_columns = (
-        "filepath",
-        "filename",
-        "project_code",
-        "status",
-        "file_size",
-        "modified_time",
-        "updated_at",
-        "hidden",
-        "metadata_json",
-    )
-
-    value_map = dict(zip(columns_tuple, values_tuple))
-    update_values = tuple(value_map[col] for col in update_columns)
-
-    return update_columns, update_values
-
-
-def mark_missing_failed(data_db: str, filepath: str):
-    with get_conn(data_db) as conn:
-        row = conn.execute(
-            f'''
-            SELECT id, hidden
-            FROM "{DATA_TABLE}"
-            WHERE filepath = ?
-            ''',
-            (filepath,),
-        ).fetchone()
-
-        if not row:
-            return
-
-        if row["hidden"] == 1:
-            return
-
-        conn.execute(
-            f'''
-            UPDATE "{DATA_TABLE}"
-            SET status = ?, updated_at = ?
-            WHERE id = ?
-            ''',
-            ("failed", utc_now_str(), row["id"]),
-        )
-        conn.commit()
 
 
 def main():
-    if len(sys.argv) < 2:
-        raise SystemExit("Usage: python APR.py <project_code>")
+    if len(sys.argv) != 2:
+        print("Usage: python3 APR.py <project_code>")
+        sys.exit(1)
 
     project_code = sys.argv[1]
-    paths = get_project_paths(project_code)
+    project_dashai_dir = f"/proj/{project_code}/DashAI"
 
-    data_db = str(paths["data_db"])
-    state_db = str(paths["state_db"])
-    log_dir = paths["monitor_log_dir"]
+    conn = APR_DB_Operations.init_db(project_dashai_dir)
 
-    init_databases(project_code)
-    ensure_log_dir(log_dir)
+    log_dir = os.path.join(project_dashai_dir, LOG_DIR)
+    os.makedirs(log_dir, exist_ok=True)
 
-    executor = ThreadPoolExecutor(max_workers=4)
+    futures = {}
 
-    try:
-        while not STOP:
-            cleanup_old_logs(log_dir)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        while True:
+            APR_DB_Operations.remove_old_logs(log_dir, keep_days=14)
+            log_file = os.path.join(log_dir, today_log_file())
+            states = APR_DB_Operations.get_states(conn)
 
-            files = Get_monitor_files(project_code)
-            current_files_set = set(files)
+            for action in APR_DB_Operations.get_pending_actions(conn):
+                APR_Utils.apply_action(conn, action, states, APR_DB_Operations)
+            states = APR_DB_Operations.get_states(conn)
 
-            processed = 0
             completed = 0
+            to_extract = 0
+            paths = APR_Utils.get_log_paths(project_dashai_dir)
 
-            with get_conn(data_db) as conn:
-                rows = conn.execute(
-                    f'''
-                    SELECT filepath
-                    FROM "{DATA_TABLE}"
-                    WHERE hidden = 0
-                    '''
-                ).fetchall()
-                visible_db_filepaths = {row["filepath"] for row in rows}
+            for log_path in paths:
+                meta = APR_Utils.parse_log_args(log_path)
+                created = states.get(meta["State_key"], {}).get("Created", now_str())
+                rec = APR_Utils.build_record(log_path, created)
+                key = rec["_state_key"]
 
-            for filepath in files:
-                record_key = str(Path(filepath).resolve())
-                existing = get_existing_record_by_key(data_db, record_key)
+                state = states.get(key, {
+                    "State_key": key,
+                    "Log_path": log_path,
+                    "Job": rec["Job"],
+                    "Project": rec["Project"],
+                    "Milestone": rec["Milestone"],
+                    "Block": rec["Block"],
+                    "Stage": rec["Stage"],
+                    "Dft_release": rec["Dft_release"],
+                    "User": rec["User"],
+                    "Created": rec["Created"],
+                    "Modified": rec["Modified"],
+                    "Removed": 0,
+                    "Force_extract": 0,
+                    "Rerun": 0,
+                })
 
-                if existing and existing.get("hidden") == 1:
-                    continue
+                state["Log_path"] = log_path
+                state["Modified"] = rec["Modified"]
+                state["User"] = rec["User"]
 
-                processed += 1
+                busy = any(path == log_path and not fut.done() for fut, path in futures.items())
+                rec["Status"], state = APR_Utils.compute_status(rec, state, busy)
 
-                new_status = Get_file_status(filepath)
-
-                if new_status == "complete":
-                    completed += 1
-
-                if existing is None:
-                    columns_tuple, values_tuple = Get_values_for_record(
-                        project_code=project_code,
-                        filepath=filepath,
-                        status=new_status,
-                        hidden=0,
+                if state.get("Removed", 0) == 1:
+                    APR_DB_Operations.upsert_state(conn, state)
+                    APR_DB_Operations.delete_tracker_row(
+                        conn,
+                        rec["Job"],
+                        rec["Milestone"],
+                        rec["Block"],
+                        rec["Stage"],
                     )
-                    Add_record(data_db, DATA_TABLE, columns_tuple, values_tuple)
-                    upsert_state(state_db, project_code, filepath, record_key, new_status, 0)
-                    executor.submit(data_processing_code, filepath)
                     continue
 
-                old_status = existing["status"]
+                if rec["Status"] == STATE_AWAIT and not busy:
+                    to_extract += 1
+                    rundir = log_path.replace(f"/logs/{rec['Stage']}.log", "")
+                    fut = pool.submit(APR_Utils.timing_results_capture, rundir, rec["Stage"], project_code)
+                    futures[fut] = log_path
+                    rec["Status"] = "Extracting"
+                    state["Last_status"] = "Extracting"
+                    state["Force_extract"] = 0
 
-                update_cols, update_vals = build_update_values(
-                    project_code=project_code,
-                    filepath=filepath,
-                    status=new_status,
-                    hidden=existing.get("hidden", 0),
-                )
-                Update_record(existing["id"], data_db, DATA_TABLE, update_cols, update_vals)
-                upsert_state(state_db, project_code, filepath, record_key, new_status, existing.get("hidden", 0))
+                rec = APR_Utils.apply_kpi_status(rec)
+                APR_DB_Operations.upsert_tracker(conn, rec)
+                APR_DB_Operations.upsert_state(conn, state)
 
-                if old_status != new_status:
-                    executor.submit(data_processing_code, filepath)
+            finished = [fut for fut in list(futures) if fut.done()]
+            for fut in finished:
+                log_path = futures.pop(fut)
+                meta = APR_Utils.parse_log_args(log_path)
+                state = APR_DB_Operations.get_states(conn).get(meta["State_key"])
 
-            missing_filepaths = visible_db_filepaths - current_files_set
-            for filepath in missing_filepaths:
-                mark_missing_failed(data_db, filepath)
+                if not state:
+                    continue
 
-            remaining = processed - completed
-            write_log_line(log_dir, processed, completed, remaining)
+                try:
+                    fut.result()
+                    state["Last_status"] = STATE_DONE
+                    state["Last_extracted_mtime"] = state["Last_seen_mtime"]
+                    state["Force_extract"] = 0
+                    completed += 1
+                except Exception:
+                    state["Last_status"] = STATE_EXTRACT_FAILED
 
-            for _ in range(POLL_INTERVAL_SECONDS):
-                if STOP:
-                    break
-                time.sleep(1)
+                APR_DB_Operations.upsert_state(conn, state)
 
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+            write_iter_log(log_file, to_extract, completed, len(futures))
+            time.sleep(POLL_SECONDS)
 
 
 if __name__ == "__main__":

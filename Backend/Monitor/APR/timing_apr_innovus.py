@@ -8,11 +8,9 @@ import sqlite3
 import warnings
 import traceback
 import re
+import subprocess
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
-
-import apr_utils
-
 
 warnings.filterwarnings("ignore")
 now = lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -24,8 +22,82 @@ RE_GROUP = re.compile(r'^\s*Path\s+Group\s*:\s*([^\s]+)$', re.IGNORECASE)
 RE_SLACK = re.compile(r'Slack\s+Time\s*([+\-]?\d+\.\d+)\s+(.+)$', re.IGNORECASE)
 
 
-def build_run_key(project_code, rundir, stage):
-    return f"{project_code}|{os.path.abspath(rundir)}|{stage}"
+def get_voltage_list(design_file):
+    voltage_list = []
+    try:
+        if not os.path.exists(design_file):
+            return voltage_list
+
+        if os.path.isdir(design_file):
+            collected = []
+            for root, _, files in os.walk(design_file):
+                for name in files:
+                    fullpath = os.path.join(root, name)
+                    try:
+                        with open(fullpath, 'r', encoding='utf-8', errors='ignore') as infile:
+                            content = infile.read()
+                        found = re.findall(r'\b(?:WCL|WC|BCH|BC|TYP)[A-Za-z0-9_.+]*\b', content)
+                        collected.extend(found)
+                    except Exception:
+                        continue
+            voltage_list = sorted(set(collected), key=len, reverse=True)
+            return voltage_list
+
+        with open(design_file, 'r', encoding='utf-8', errors='ignore') as infile:
+            content = infile.read()
+
+        found = re.findall(r'\b(?:WCL|WC|BCH|BC|TYP)[A-Za-z0-9_.+]*\b', content)
+        voltage_list = sorted(set(found), key=len, reverse=True)
+    except Exception:
+        voltage_list = []
+
+    return voltage_list
+
+
+def parse_timing_args(filename):
+    parts = filename.strip().split('/')
+    out = []
+    corners = ['WCL', 'WC', 'BCH', 'BC', 'TYP']
+
+    project = parts[2]
+    milestone = parts[4]
+    block = parts[5]
+    flow = parts[6]
+    tool = parts[7]
+    job = parts[-5]
+    stage = parts[-1].replace('.tarpt.gz', '').split('_final_')[0]
+    mode = parts[-2].split('_')[0]
+    check = parts[-2].split('_')[-1]
+    pathgroup = parts[-1].replace('.tarpt.gz', '').split('_final_')[-1]
+    design_file = "/".join(filename.strip().split('/')[:-4])
+
+    voltage_list = get_voltage_list(design_file)
+    voltage = ""
+
+    for v in voltage_list:
+        if v in parts[-2]:
+            voltage = v
+            break
+
+    if not voltage:
+        for c in corners:
+            if c in parts[-2]:
+                voltage = c
+                break
+
+    corner = parts[-2].replace(mode + "_", "").replace("_" + check, "").replace(voltage, "")
+    args = [job, project, milestone, block, flow, tool, stage, mode, check, corner, voltage, pathgroup]
+    out.extend(args)
+    return out
+
+
+def get_timing_report_paths(rundir, stage):
+    grep_path = rf'(NORM|SHIFT|CAP|OCC).*{re.escape(stage)}_final_.*(tarpt\.gz)'
+    cmd = f"find {rundir} | grep -Ei '{grep_path}' | grep -vi all"
+    print("DEBUG shell pipeline:\n", cmd, "\n")
+    results = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    results_list = [line.strip() for line in results.stdout.splitlines() if line.strip()]
+    return results_list
 
 
 def init_db(db_path):
@@ -35,69 +107,88 @@ def init_db(db_path):
     cur = conn.cursor()
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS APR_timing_detail (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_key TEXT NOT NULL,
-            project_code TEXT NOT NULL,
-            rundir TEXT NOT NULL,
-            stage TEXT NOT NULL,
-            mode TEXT,
-            check_name TEXT,
-            corner TEXT,
-            voltage TEXT,
-            pathgroup TEXT,
-            slack REAL,
-            endpoint TEXT,
-            startpoint TEXT,
-            timing TEXT,
-            report TEXT,
-            created_at TEXT NOT NULL
+        CREATE TABLE IF NOT EXISTS APR_TIMING_SUMMARY (
+            Job TEXT,
+            Milestone TEXT,
+            Block TEXT,
+            Stage TEXT,
+            Mode TEXT,
+            Check TEXT,
+            Corner TEXT,
+            Voltage TEXT,
+            Pathgroup TEXT,
+            WNS REAL,
+            TNS REAL,
+            NVP INTEGER
         )
     """)
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS APR_timing_summary (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_key TEXT NOT NULL,
-            project_code TEXT NOT NULL,
-            rundir TEXT NOT NULL,
-            stage TEXT NOT NULL,
-            mode TEXT,
-            check_name TEXT,
-            corner TEXT,
-            voltage TEXT,
-            pathgroup TEXT,
-            wns REAL,
-            tns REAL,
-            nvp INTEGER,
-            created_at TEXT NOT NULL
+        CREATE TABLE IF NOT EXISTS APR_TIMING_DETAIL (
+            Job TEXT,
+            Milestone TEXT,
+            Block TEXT,
+            Stage TEXT,
+            Mode TEXT,
+            Check TEXT,
+            Corner TEXT,
+            Voltage TEXT,
+            Pathgroup TEXT,
+            Slack REAL,
+            Endpoint TEXT,
+            Startpoint TEXT,
+            Timing TEXT,
+            Report TEXT
         )
     """)
 
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_apr_timing_detail_run_key ON APR_timing_detail(run_key)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_apr_timing_detail_stage ON APR_timing_detail(stage)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_apr_timing_detail_pathgroup ON APR_timing_detail(pathgroup)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_apr_timing_detail_check_name ON APR_timing_detail(check_name)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_apr_timing_detail_endpoint ON APR_timing_detail(endpoint)")
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_apr_timing_summary_main
+        ON APR_TIMING_SUMMARY(Job, Milestone, Block, Stage)
+    """)
 
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_apr_timing_summary_run_key ON APR_timing_summary(run_key)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_apr_timing_summary_stage ON APR_timing_summary(stage)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_apr_timing_summary_pathgroup ON APR_timing_summary(pathgroup)")
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_apr_timing_detail_main
+        ON APR_TIMING_DETAIL(Job, Milestone, Block, Stage)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_apr_timing_detail_endpoint
+        ON APR_TIMING_DETAIL(Endpoint)
+    """)
 
     conn.commit()
     return conn
 
 
-def clear_run_data(conn, run_key):
+def clear_existing_run_rows(conn, job, milestone, block, stage):
     cur = conn.cursor()
-    cur.execute("DELETE FROM APR_timing_detail WHERE run_key = ?", (run_key,))
-    cur.execute("DELETE FROM APR_timing_summary WHERE run_key = ?", (run_key,))
+
+    cur.execute("""
+        DELETE FROM APR_TIMING_SUMMARY
+        WHERE Job = ? AND Milestone = ? AND Block = ? AND Stage = ?
+    """, (job, milestone, block, stage))
+
+    cur.execute("""
+        DELETE FROM APR_TIMING_DETAIL
+        WHERE Job = ? AND Milestone = ? AND Block = ? AND Stage = ?
+    """, (job, milestone, block, stage))
+
     conn.commit()
 
 
 def parse_report(reportpath):
     rows = []
-    parts = apr_utils.parse_timing_args(reportpath)
+    parts = parse_timing_args(reportpath)
+
+    job = parts[0]
+    milestone = parts[2]
+    block = parts[3]
+    stage = parts[6]
+    mode = parts[7]
+    check = parts[8]
+    corner = parts[9]
+    voltage = parts[10]
 
     try:
         with gzip.open(reportpath, 'rt', encoding='utf-8', errors='ignore') as file:
@@ -133,10 +224,14 @@ def parse_report(reportpath):
 
                 if startpoint and endpoint and pathgroup and slack is not None:
                     rows.append((
-                        parts[7],      # mode
-                        parts[8],      # check_name
-                        parts[9],      # corner
-                        parts[10],     # voltage
+                        job,
+                        milestone,
+                        block,
+                        stage,
+                        mode,
+                        check,
+                        corner,
+                        voltage,
                         pathgroup,
                         slack,
                         endpoint,
@@ -182,77 +277,59 @@ def process_timing_files(paths, max_workers=os.cpu_count()):
     return all_rows, errors
 
 
-def insert_timing_detail(conn, project_code, rundir, stage, run_key, rows):
+def insert_timing_detail(conn, rows):
     if not rows:
         return
 
     cur = conn.cursor()
-    ts = now()
-
-    payload = []
-    for r in rows:
-        payload.append((
-            run_key,
-            project_code,
-            os.path.abspath(rundir),
-            stage,
-            r[0],   # mode
-            r[1],   # check_name
-            r[2],   # corner
-            r[3],   # voltage
-            r[4],   # pathgroup
-            r[5],   # slack
-            r[6],   # endpoint
-            r[7],   # startpoint
-            r[8],   # timing
-            r[9],   # report
-            ts
-        ))
-
     cur.executemany("""
-        INSERT INTO APR_timing_detail (
-            run_key, project_code, rundir, stage,
-            mode, check_name, corner, voltage,
-            pathgroup, slack, endpoint, startpoint,
-            timing, report, created_at
+        INSERT INTO APR_TIMING_DETAIL (
+            Job, Milestone, Block, Stage,
+            Mode, Check, Corner, Voltage, Pathgroup,
+            Slack, Endpoint, Startpoint, Timing, Report
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, payload)
-
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, rows)
     conn.commit()
 
 
-def get_distinct_values(conn, run_key, column_name):
+def get_distinct_values(conn, job, milestone, block, stage, column_name):
     cur = conn.cursor()
     cur.execute(f"""
-        SELECT DISTINCT {column_name}
-        FROM APR_timing_detail
-        WHERE run_key = ?
-        ORDER BY {column_name}
-    """, (run_key,))
+        SELECT DISTINCT "{column_name}"
+        FROM APR_TIMING_DETAIL
+        WHERE Job = ? AND Milestone = ? AND Block = ? AND Stage = ?
+        ORDER BY "{column_name}"
+    """, (job, milestone, block, stage))
     return [row[0] for row in cur.fetchall() if row[0] is not None]
 
 
-def get_summary_options(conn, run_key):
-    cols = ["mode", "check_name", "corner", "voltage", "pathgroup"]
+def get_summary_options(conn, job, milestone, block, stage):
+    cols = ["Mode", "Check", "Corner", "Voltage", "Pathgroup"]
     options = {}
 
     for col in cols:
-        vals = get_distinct_values(conn, run_key, col)
-        if col != "check_name" and vals:
+        vals = get_distinct_values(conn, job, milestone, block, stage, col)
+        if col != "Check" and vals:
             vals.append("all")
         options[col] = vals
 
     return cols, options
 
 
-def query_violated_summary(conn, run_key, filters):
-    where = ["run_key = ?", "timing = 'VIOLATED'"]
-    params = [run_key]
+def query_violated_summary(conn, job, milestone, block, stage, filters):
+    where = [
+        'Job = ?',
+        'Milestone = ?',
+        'Block = ?',
+        'Stage = ?',
+        'Timing = "VIOLATED"'
+    ]
+    params = [job, milestone, block, stage]
 
     for col, value in filters.items():
         if value != "all":
-            where.append(f"{col} = ?")
+            where.append(f'"{col}" = ?')
             params.append(value)
 
     where_sql = " AND ".join(where)
@@ -260,19 +337,19 @@ def query_violated_summary(conn, run_key, filters):
     query = f"""
         WITH ranked AS (
             SELECT
-                slack,
-                endpoint,
+                Slack,
+                Endpoint,
                 ROW_NUMBER() OVER (
-                    PARTITION BY endpoint
-                    ORDER BY slack ASC, endpoint ASC
+                    PARTITION BY Endpoint
+                    ORDER BY Slack ASC, Endpoint ASC
                 ) AS rn
-            FROM APR_timing_detail
+            FROM APR_TIMING_DETAIL
             WHERE {where_sql}
         )
         SELECT
-            MIN(slack) AS wns,
-            SUM(slack) AS tns,
-            COUNT(*) AS nvp
+            MIN(Slack) AS WNS,
+            SUM(Slack) AS TNS,
+            COUNT(*) AS NVP
         FROM ranked
         WHERE rn = 1
     """
@@ -294,8 +371,8 @@ def query_violated_summary(conn, run_key, filters):
     return wns, tns, nvp
 
 
-def insert_timing_summary(conn, project_code, rundir, stage, run_key):
-    cols, options = get_summary_options(conn, run_key)
+def insert_timing_summary(conn, job, milestone, block, stage):
+    cols, options = get_summary_options(conn, job, milestone, block, stage)
 
     if not all(options.get(c) for c in cols):
         print("No data found for summary generation")
@@ -310,26 +387,24 @@ def insert_timing_summary(conn, project_code, rundir, stage, run_key):
         combos = next_combos
 
     summary_rows = []
-    ts = now()
 
     for combo in combos:
         filters = dict(zip(cols, combo))
-        wns, tns, nvp = query_violated_summary(conn, run_key, filters)
+        wns, tns, nvp = query_violated_summary(conn, job, milestone, block, stage, filters)
 
         summary_rows.append((
-            run_key,
-            project_code,
-            os.path.abspath(rundir),
+            job,
+            milestone,
+            block,
             stage,
-            filters["mode"],
-            filters["check_name"],
-            filters["corner"],
-            filters["voltage"],
-            filters["pathgroup"],
+            filters["Mode"],
+            filters["Check"],
+            filters["Corner"],
+            filters["Voltage"],
+            filters["Pathgroup"],
             wns,
             tns,
-            nvp,
-            ts
+            nvp
         ))
 
         print(f"COMBINATION {combo}")
@@ -337,40 +412,39 @@ def insert_timing_summary(conn, project_code, rundir, stage, run_key):
 
     cur = conn.cursor()
     cur.executemany("""
-        INSERT INTO APR_timing_summary (
-            run_key, project_code, rundir, stage,
-            mode, check_name, corner, voltage, pathgroup,
-            wns, tns, nvp, created_at
+        INSERT INTO APR_TIMING_SUMMARY (
+            Job, Milestone, Block, Stage,
+            Mode, Check, Corner, Voltage, Pathgroup,
+            WNS, TNS, NVP
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, summary_rows)
-
     conn.commit()
 
 
-def summarize_stage_check(conn, run_key, check_name):
+def summarize_stage_check(conn, job, milestone, block, stage, check_name):
     query = """
         WITH ranked AS (
             SELECT
-                slack,
-                endpoint,
+                Slack,
+                Endpoint,
                 ROW_NUMBER() OVER (
-                    PARTITION BY endpoint
-                    ORDER BY slack ASC, endpoint ASC
+                    PARTITION BY Endpoint
+                    ORDER BY Slack ASC, Endpoint ASC
                 ) AS rn
-            FROM APR_timing_detail
-            WHERE run_key = ? AND check_name = ?
+            FROM APR_TIMING_DETAIL
+            WHERE Job = ? AND Milestone = ? AND Block = ? AND Stage = ? AND Check = ?
         )
         SELECT
-            MIN(slack) AS wns,
-            COUNT(*) AS nvp,
-            SUM(slack) AS tns
+            MIN(Slack) AS WNS,
+            COUNT(*) AS NVP,
+            SUM(Slack) AS TNS
         FROM ranked
         WHERE rn = 1
     """
 
     cur = conn.cursor()
-    cur.execute(query, (run_key, check_name))
+    cur.execute(query, (job, milestone, block, stage, check_name))
     row = cur.fetchone()
 
     if not row or row[0] is None:
@@ -382,9 +456,9 @@ def summarize_stage_check(conn, run_key, check_name):
     return wns, nvp, tns
 
 
-def print_stage_summary(conn, run_key):
-    setup_wns, setup_nvp, setup_tns = summarize_stage_check(conn, run_key, "SETUP")
-    hold_wns, hold_nvp, hold_tns = summarize_stage_check(conn, run_key, "HOLD")
+def print_stage_summary(conn, job, milestone, block, stage):
+    setup_wns, setup_nvp, setup_tns = summarize_stage_check(conn, job, milestone, block, stage, "SETUP")
+    hold_wns, hold_nvp, hold_tns = summarize_stage_check(conn, job, milestone, block, stage, "HOLD")
 
     print("Stage summary")
     print({
@@ -397,22 +471,25 @@ def print_stage_summary(conn, run_key):
     })
 
 
-def timing_db_per_stage(project_code, rundir, stage, db_path):
-    run_key = build_run_key(project_code, rundir, stage)
+def timing_db_per_stage(project_code, stage, rundir):
+    db_path = f"/proj/{project_code}/DashAI/DashAI_APR.db"
 
-    conn = init_db(db_path)
-
-    print(f"run_key={run_key}")
-    print("Deleting old rows for this run_key")
-    clear_run_data(conn, run_key)
-
-    reports = apr_utils.get_timing_report_paths(rundir, stage)
+    reports = get_timing_report_paths(rundir, stage)
     print(f"Reports={reports}")
 
     if not reports:
         print("No reports found")
-        conn.close()
         return
+
+    first_parts = parse_timing_args(reports[0])
+    job = first_parts[0]
+    milestone = first_parts[2]
+    block = first_parts[3]
+
+    conn = init_db(db_path)
+
+    print(f"Deleting old rows for Job={job}, Milestone={milestone}, Block={block}, Stage={stage}")
+    clear_existing_run_rows(conn, job, milestone, block, stage)
 
     t0 = time.time()
 
@@ -420,13 +497,13 @@ def timing_db_per_stage(project_code, rundir, stage, db_path):
     timing_rows, errors = process_timing_files(reports, max_workers=os.cpu_count())
 
     if timing_rows:
-        print("Inserting APR_timing_detail")
-        insert_timing_detail(conn, project_code, rundir, stage, run_key, timing_rows)
+        print("Inserting APR_TIMING_DETAIL")
+        insert_timing_detail(conn, timing_rows)
 
-        print("Inserting APR_timing_summary")
-        insert_timing_summary(conn, project_code, rundir, stage, run_key)
+        print("Inserting APR_TIMING_SUMMARY")
+        insert_timing_summary(conn, job, milestone, block, stage)
 
-        print_stage_summary(conn, run_key)
+        print_stage_summary(conn, job, milestone, block, stage)
 
         timetaken = round(time.time() - t0, 2)
         hours = int(timetaken // 3600)
@@ -443,23 +520,13 @@ def timing_db_per_stage(project_code, rundir, stage, db_path):
     conn.close()
 
 
-def print_available_commands():
-    print("Available Functions")
-    print("[1] parse_report(reportpath)")
-    print("[2] process_timing_files(paths, max_workers)")
-    print("[3] insert_timing_detail(conn, project_code, rundir, stage, run_key, rows)")
-    print("[4] insert_timing_summary(conn, project_code, rundir, stage, run_key)")
-    print("[5] timing_db_per_stage(project_code, rundir, stage, db_path)")
-
-
 if __name__ == "__main__":
-    if len(sys.argv) != 5:
-        print("Usage: python db_timing_innovus.py <project_code> <rundir> <stage> <db_path>")
+    if len(sys.argv) != 4:
+        print("Usage: python timing_apr_innovus.py <project_code> <stage> <rundir>")
         sys.exit(1)
 
     project_code = sys.argv[1]
-    rundir = sys.argv[2]
-    stage = sys.argv[3]
-    db_path = sys.argv[4]
+    stage = sys.argv[2]
+    rundir = sys.argv[3]
 
-    timing_db_per_stage(project_code, rundir, stage, db_path)
+    timing_db_per_stage(project_code, stage, rundir)

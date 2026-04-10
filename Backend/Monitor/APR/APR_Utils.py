@@ -1,0 +1,219 @@
+import os
+import csv
+import time
+import pwd
+import subprocess
+
+from APR_Definitions import (
+    STAGES, KPI_COLUMNS,
+    DEFAULT_MINDEPTH, DEFAULT_MAXDEPTH, DEFAULT_FLOW, DEFAULT_TOOL,
+    STATE_AWAIT, STATE_RUNNING, STATE_EXTRACTING, STATE_FAILED, STATE_DONE,
+    ACTION_REUPDATE, ACTION_REMOVE, ACTION_ADD_BACK, make_state_key
+)
+
+
+def parse_log_args(filename):
+    parts = os.path.abspath(filename).strip("/").split("/")
+    job = parts[-3]
+    project = parts[2] if len(parts) > 2 else ""
+    milestone = parts[4] if len(parts) > 4 else ""
+    block = parts[5] if len(parts) > 5 else ""
+    stage = os.path.splitext(os.path.basename(filename))[0]
+
+    dft_release = "NA"
+    try:
+        cmd = f"find {os.path.dirname(filename)}/../../inputs/dft/vlog/*dft.v | xargs -Ixx realpath xx"
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)
+        out = r.stdout.strip()
+        if out and "/iExchange/DFT" in out:
+            dft_release = out.split("/")[-3]
+    except Exception:
+        pass
+
+    return {
+        "Job": job,
+        "Project": project,
+        "Milestone": milestone,
+        "Block": block,
+        "Stage": stage,
+        "Dft_release": dft_release,
+        "State_key": make_state_key(job, milestone, block, stage),
+    }
+
+
+def extract_apr_kpi(path):
+    try:
+        args = parse_log_args(path)
+        rptfile = os.path.join(os.path.dirname(os.path.dirname(path)), f"reports/{args['Stage']}.final.kpi.rpt")
+        out = []
+        with open(rptfile, "r", encoding="utf-8") as infile:
+            reader = csv.reader(infile, delimiter="|")
+            for index, row in enumerate(reader):
+                if index < 2:
+                    continue
+                if len(row) > 1:
+                    vals = [item.strip() for item in row[1:-1]]
+                    out.append(vals[-1] if vals else "-")
+        return {col: (out[i] if i < len(out) else "-") for i, col in enumerate(KPI_COLUMNS)}
+    except Exception:
+        return {col: "-" for col in KPI_COLUMNS}
+
+
+def timing_results_capture(rundir, stage, project_name):
+    proc_py = os.path.join(os.path.dirname(__file__), "timing_apr_innovus.py")
+    my_env = os.environ.copy()
+    my_env["LSB_DEFAULTPROJECT"] = project_name
+    py = "python3" if os.name != "nt" else "py"
+    cmd = f'module load Python3/3.11.1 && utilq -Is {py} "{proc_py}" "{project_name}" "{rundir}" "{stage}"'
+    try:
+        r = subprocess.run(cmd, shell=True, env=my_env, capture_output=True, text=True, check=True)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr.strip() or f"Exited {r.returncode}")
+    except Exception as e:
+        print(f"Error Executing Command: {e}")
+        if "r" in locals():
+            print(f"StdErr: {r.stderr}")
+
+
+def get_run_directories(basepath, mindepth=DEFAULT_MINDEPTH, maxdepth=DEFAULT_MAXDEPTH, flow=DEFAULT_FLOW, tool=DEFAULT_TOOL):
+    cmd = f'find {basepath} -mindepth {mindepth} -maxdepth {maxdepth} -type d -wholename "*/{flow}/{tool}/*"'
+    result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def get_log_paths(basepath):
+    paths = set()
+    for rundir in get_run_directories(basepath):
+        for stage in STAGES:
+            p = os.path.join(rundir, "logs", f"{stage}.log")
+            if os.path.exists(p):
+                paths.add(os.path.abspath(p))
+    return sorted(paths)
+
+
+def get_file_info(file_path):
+    st = os.stat(file_path)
+    try:
+        user = pwd.getpwuid(st.st_uid).pw_name
+    except Exception:
+        user = str(st.st_uid)
+    return {
+        "User": user,
+        "Modified": time.strftime("%Y%m%d %H:%M:%S", time.localtime(st.st_mtime)),
+        "_mtime": int(st.st_mtime),
+        "_size": int(st.st_size),
+    }
+
+
+def build_record(log_path, created):
+    meta = parse_log_args(log_path)
+    info = get_file_info(log_path)
+    rec = {
+        "Job": meta["Job"],
+        "Project": meta["Project"],
+        "Milestone": meta["Milestone"],
+        "Block": meta["Block"],
+        "Stage": meta["Stage"],
+        "Dft_release": meta["Dft_release"],
+        "User": info["User"],
+        "Created": created,
+        "Modified": info["Modified"],
+        "Rerun": 0,
+        "Status": "",
+        "Comments": "-",
+        "Promote": "no",
+        "_log_path": log_path,
+        "_mtime": info["_mtime"],
+        "_size": info["_size"],
+        "_state_key": meta["State_key"],
+    }
+    rec.update({k: "-" for k in KPI_COLUMNS})
+    return rec
+
+
+def db_exists_for_stage(file_path):
+    meta = parse_log_args(file_path)
+    stage = meta["Stage"]
+    job = meta["Job"]
+    db_path = file_path.replace(f"/logs/{stage}.log", f"/dbs/{stage}_final/{job}.dat/{job}.dbinfo")
+    return os.path.exists(db_path)
+
+
+def compute_status(rec, state, is_extracting):
+    now_epoch = int(time.time())
+    mtime = rec["_mtime"]
+    size = rec["_size"]
+
+    last_seen_mtime = state.get("Last_seen_mtime")
+    last_seen_size = state.get("Last_seen_size")
+    last_change_time = state.get("Last_change_time")
+    last_extracted_mtime = state.get("Last_extracted_mtime")
+    last_status = state.get("Last_status")
+    rerun = int(state.get("Rerun", 0) or 0)
+    force_extract = int(state.get("Force_extract", 0) or 0)
+
+    if last_seen_mtime is None or mtime != last_seen_mtime or size != last_seen_size:
+        last_change_time = now_epoch
+
+    exists = db_exists_for_stage(state["Log_path"])
+
+    if is_extracting:
+        status = STATE_EXTRACTING
+    elif force_extract == 1:
+        status = STATE_AWAIT
+    elif exists:
+        if last_extracted_mtime is None:
+            status = STATE_AWAIT
+        elif mtime > last_extracted_mtime:
+            if last_status == STATE_DONE:
+                rerun += 1
+            status = STATE_AWAIT
+        else:
+            status = STATE_DONE
+    else:
+        age = now_epoch - (last_change_time if last_change_time is not None else now_epoch)
+        status = STATE_RUNNING if age <= 15 * 60 else STATE_FAILED
+
+    state["Last_seen_mtime"] = mtime
+    state["Last_seen_size"] = size
+    state["Last_change_time"] = last_change_time
+    state["Last_status"] = status
+    state["Rerun"] = rerun
+    rec["Rerun"] = rerun
+    return status, state
+
+
+def apply_kpi_status(rec):
+    if rec["Status"] == STATE_DONE:
+        rec.update(extract_apr_kpi(rec["_log_path"]))
+        ok = all(rec[k] not in {"", "-"} for k in KPI_COLUMNS)
+        rec["Comments"] = "QC PASS" if ok else "ERR002"
+        rec["Promote"] = "yes" if ok else "no"
+        if not ok:
+            rec["Status"] = STATE_FAILED
+    elif rec["Status"] == STATE_FAILED:
+        rec["Comments"] = "ERR001"
+        rec["Promote"] = "no"
+    return rec
+
+
+def apply_action(conn, action, states, APR_DB_Operations):
+    state = states.get(action["State_key"])
+    if not state:
+        APR_DB_Operations.complete_action(conn, action["Id"])
+        return
+
+    if action["Action"] == ACTION_REMOVE:
+        state["Removed"] = 1
+        APR_DB_Operations.upsert_state(conn, state)
+        APR_DB_Operations.delete_tracker_row(conn, state["Job"], state["Milestone"], state["Block"], state["Stage"])
+
+    elif action["Action"] == ACTION_ADD_BACK:
+        state["Removed"] = 0
+        APR_DB_Operations.upsert_state(conn, state)
+
+    elif action["Action"] == ACTION_REUPDATE:
+        state["Force_extract"] = 1
+        APR_DB_Operations.upsert_state(conn, state)
+
+    APR_DB_Operations.complete_action(conn, action["Id"])
