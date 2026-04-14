@@ -103,9 +103,11 @@ def monitor_list():
 def monitor_tracker():
     project_code = (request.args.get("project_code") or "").strip()
     template_name = (request.args.get("template_name") or "").strip()
+    view_mode = (request.args.get("view_mode") or "visible").strip().lower()
+    limit = request.args.get("limit", type=int)
 
     try:
-        data = service.get_tracker_table_data(project_code, template_name)
+        data = service.get_tracker_table_data(project_code, template_name, view_mode=view_mode, limit=limit)
         return jsonify({"ok": True, "data": data})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 400

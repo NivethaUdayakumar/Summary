@@ -37,12 +37,6 @@
         ]
     };
 
-    function ensureSemanticDropdown() {
-        if (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.dropdown === 'function') {
-            window.jQuery('.ui.dropdown').dropdown();
-        }
-    }
-
     async function fetchAPRTrackerRows() {
         var response = await fetch('/api/read-table', {
             method: 'POST',
@@ -124,8 +118,6 @@
         // Redraw once at the end
         dt.draw();
         window.applyAPRTrackerPreset(table, document.getElementById('presetSelect').value);
-        ensureSemanticDropdown();
-        window.initAPRActionDropdowns();
     }
 
     function bindToolbar() {
@@ -151,8 +143,6 @@
                     var rows = await fetchAPRTrackerRows();
                     await table.reload(rows);
                     window.applyAPRTrackerPreset(table, document.getElementById('presetSelect').value);
-                    ensureSemanticDropdown();
-                    window.initAPRActionDropdowns();
                 } catch (error) {
                     console.error(error);
                     alert(error.message);
@@ -162,8 +152,6 @@
     }
 
     async function initAPRTracker() {
-        ensureSemanticDropdown();
-
         var rows = await fetchAPRTrackerRows();
 
         table = new TableBuilder({
@@ -194,8 +182,6 @@
             extensions: {
                 afterInit: function (dt, builder) {
                     window.bindAPRActionEvents(builder);
-                    ensureSemanticDropdown();
-                    window.initAPRActionDropdowns();
                 }
             }
         });
@@ -203,8 +189,6 @@
         await table.render();
         bindToolbar();
         window.applyAPRTrackerPreset(table, 'default');
-        ensureSemanticDropdown();
-        window.initAPRActionDropdowns();
     }
 
     document.addEventListener('DOMContentLoaded', function () {

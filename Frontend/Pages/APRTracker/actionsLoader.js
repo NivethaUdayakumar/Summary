@@ -33,19 +33,19 @@
                 });
 
                 if (hiddenButtons.length > 0) {
-                    html += '<div class="ui floating dropdown mini button">';
-                    html += 'More';
-                    html += '<div class="menu">';
+                    html += '<details class="apr-action-menu">';
+                    html += '<summary class="ui mini button">More</summary>';
+                    html += '<div class="apr-action-menu-list">';
 
                     hiddenButtons.forEach(function (btn) {
                         html +=
-                            '<div class="item" data-apr-action="' + escapeHtml(btn.id) + '">' +
+                            '<button type="button" class="ui mini button apr-action-menu-item" data-apr-action="' + escapeHtml(btn.id) + '">' +
                             escapeHtml(btn.label) +
-                            '</div>';
+                            '</button>';
                     });
 
                     html += '</div>';
-                    html += '</div>';
+                    html += '</details>';
                 }
 
                 return html;
@@ -78,12 +78,11 @@
             if (button && typeof button.handler === 'function') {
                 button.handler(rowData, dt, tr, tableBuilder);
             }
-        });
-    };
 
-    window.initAPRActionDropdowns = function () {
-        if (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.dropdown === 'function') {
-            window.jQuery('.dt-actions .ui.dropdown').dropdown();
-        }
+            var menu = actionEl.closest('details');
+            if (menu) {
+                menu.open = false;
+            }
+        });
     };
 })();

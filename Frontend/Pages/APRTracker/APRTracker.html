@@ -32,8 +32,44 @@
         }
 
         .dt-actions .ui.button,
-        .dt-actions .ui.dropdown {
+        .dt-actions .apr-action-menu {
             margin-right: 4px;
+        }
+
+        .apr-action-menu {
+            position: relative;
+            display: inline-block;
+        }
+
+        .apr-action-menu summary {
+            list-style: none;
+            cursor: pointer;
+        }
+
+        .apr-action-menu summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .apr-action-menu-list {
+            position: absolute;
+            top: calc(100% + 4px);
+            right: 0;
+            z-index: 20;
+            min-width: 140px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 8px;
+            border: 1px solid rgba(34, 36, 38, 0.15);
+            border-radius: 0.28571429rem;
+            background: #ffffff;
+            box-shadow: 0 2px 12px rgba(34, 36, 38, 0.15);
+        }
+
+        .apr-action-menu-item {
+            width: 100%;
+            margin: 0 !important;
+            text-align: left;
         }
 
         #aprTrackerTable {
@@ -58,7 +94,6 @@
     <table id="aprTrackerTable" class="display nowrap"></table>
 
     <script src="/static/Vendor/jquery/jquery.min.js"></script>
-    <script src="/static/Vendor/semantic-ui/semantic.min.js"></script>
     <script src="/static/Vendor/datatables/datatables.min.js"></script>
 
     <script src="/static/AdvancedBuilders/AdvancedTable/AdvancedTable.js"></script>

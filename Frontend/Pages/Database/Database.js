@@ -3,6 +3,7 @@ let currentTable = '';
 let currentSchema = [];
 let mainDataTable = null;
 let selectedRowIndexes = new Set();
+const DEFAULT_PREVIEW_ROW_LIMIT = 100;
 
 const listDropdown = {
     extend: 'dropdown',
@@ -68,6 +69,32 @@ function formatBytes(bytes) {
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
     if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function setCurrentTableLabel(label) {
+    document.getElementById('currentTableLabel').textContent = label;
+}
+
+function getPreviewRowLimit(meta) {
+    const limit = Number(meta && meta.row_limit);
+    return Number.isFinite(limit) && limit > 0 ? limit : DEFAULT_PREVIEW_ROW_LIMIT;
+}
+
+function formatCount(value) {
+    const count = Number(value);
+    return Number.isFinite(count) ? count.toLocaleString() : String(value || 0);
+}
+
+function buildPreviewLabel(label, meta) {
+    if (!meta || !(Number(meta.row_limit) > 0)) {
+        return label;
+    }
+
+    if (Number.isFinite(Number(meta.total_rows))) {
+        return `${label} (${formatCount(meta.total_rows)} rows total, preview max ${getPreviewRowLimit(meta)})`;
+    }
+
+    return `${label} (preview max ${getPreviewRowLimit(meta)} rows)`;
 }
 
 function getTypeCategory(type) {
@@ -162,16 +189,16 @@ async function openDb() {
 
     currentDbPath = dbPath;
     renderDbInfo(data.info);
-    await loadTables();
-    await listTemplates();
 
     currentTable = '';
     currentSchema = [];
-    document.getElementById('currentTableLabel').textContent = 'None';
+    setCurrentTableLabel('None');
     buildSchemaTable([]);
     buildRecordForm([]);
     updateRemoveColumnDropdown([]);
     renderMainTable([], []);
+
+    await Promise.all([loadTables(), listTemplates()]);
 
     alert('Database loaded');
 }
@@ -186,9 +213,19 @@ async function refreshDbInfo() {
 async function loadTables() {
     if (!currentDbPath) return;
 
-    const data = await api(`/api/database/tables?db_path=${encodeURIComponent(currentDbPath)}`);
     const wrap = document.getElementById('tableList');
+    wrap.innerHTML = '<div class="table-meta">Loading tables...</div>';
+
+    const data = await api(`/api/database/tables?db_path=${encodeURIComponent(currentDbPath)}`);
     wrap.innerHTML = '';
+    const previewRowLimit = Number(data.preview_row_limit) > 0
+        ? Number(data.preview_row_limit)
+        : DEFAULT_PREVIEW_ROW_LIMIT;
+
+    if (!data.tables || data.tables.length === 0) {
+        wrap.innerHTML = '<div class="table-meta">No tables yet</div>';
+        return;
+    }
 
     (data.tables || []).forEach(table => {
         const row = document.createElement('div');
@@ -197,7 +234,7 @@ async function loadTables() {
         row.innerHTML = `
             <div>
                 <div class="table-name">${table.name}</div>
-                <div class="table-meta">Rows: ${table.row_count}</div>
+                <div class="table-meta">Exact row count shown on open, preview up to ${previewRowLimit} rows</div>
             </div>
             <button class="ui button small" data-table="${table.name}">Open</button>
         `;
@@ -212,17 +249,21 @@ async function loadTables() {
 
 async function loadTable(tableName) {
     currentTable = tableName;
-    document.getElementById('currentTableLabel').textContent = tableName;
+    setCurrentTableLabel(`${tableName} (loading preview...)`);
 
-    const schemaData = await api(`/api/database/table_schema?db_path=${encodeURIComponent(currentDbPath)}&table_name=${encodeURIComponent(tableName)}`);
+    const [schemaData, data] = await Promise.all([
+        api(`/api/database/table_schema?db_path=${encodeURIComponent(currentDbPath)}&table_name=${encodeURIComponent(tableName)}`),
+        api(`/api/database/table_data?db_path=${encodeURIComponent(currentDbPath)}&table_name=${encodeURIComponent(tableName)}`)
+    ]);
+
     currentSchema = schemaData.schema.columns || [];
 
     buildSchemaTable(currentSchema);
     updateRemoveColumnDropdown(currentSchema);
     buildRecordForm(currentSchema);
 
-    const data = await api(`/api/database/table_data?db_path=${encodeURIComponent(currentDbPath)}&table_name=${encodeURIComponent(tableName)}`);
     renderMainTable(data.rows || [], currentSchema);
+    setCurrentTableLabel(buildPreviewLabel(tableName, data));
 
     selectedRowIndexes.clear();
 }
@@ -329,6 +370,7 @@ function renderMainTable(rows, schema) {
         data: rows,
         paging: true,
         searching: true,
+        deferRender: true,
         ordering: {
             indicators: false,
             handler: false
@@ -398,7 +440,7 @@ async function deleteTable() {
 
     currentTable = '';
     currentSchema = [];
-    document.getElementById('currentTableLabel').textContent = 'None';
+    setCurrentTableLabel('None');
     buildSchemaTable([]);
     buildRecordForm([]);
     updateRemoveColumnDropdown([]);
@@ -551,6 +593,7 @@ async function runQuery() {
         return;
     }
 
+    setCurrentTableLabel('Query Result (running...)');
     const data = await api('/api/database/query', 'POST', {
         db_path: currentDbPath,
         sql: sql
@@ -568,7 +611,7 @@ async function runQuery() {
         }))
         : [];
 
-    document.getElementById('currentTableLabel').textContent = 'Query Result';
+    setCurrentTableLabel(buildPreviewLabel('Query Result', data));
     buildSchemaTable(querySchema);
     buildRecordForm([]);
     updateRemoveColumnDropdown([]);

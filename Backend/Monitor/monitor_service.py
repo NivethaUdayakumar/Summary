@@ -22,10 +22,13 @@ APPDATA_DIR.mkdir(parents=True, exist_ok=True)
 APP_PROJECT_JSON = CONFIG_DIR / "app.project.json"
 PROJECTS_BASE_DIR = Path(os.environ.get("PROJECTS_BASE_DIR", "/proj"))
 REGISTRY_DB = APPDATA_DIR / "monitor_registry.db"
+TRACKER_PREVIEW_ROWS = 100
 
 
 class MonitorService:
     def __init__(self):
+        self._log_cache = {}
+        self._process_cache = {}
         self._init_registry()
 
     def _init_registry(self):
@@ -198,6 +201,54 @@ class MonitorService:
         except Exception:
             return False
 
+    def _get_process_snapshot(self, pid):
+        if not pid:
+            return {
+                "is_running": False,
+                "cpu_percent": 0.0,
+                "memory_mb": 0.0,
+                "process_status": "not_running"
+            }
+
+        cache_entry = self._process_cache.get(pid)
+        proc = cache_entry["proc"] if cache_entry else None
+        is_new_proc = proc is None
+
+        try:
+            if proc is None:
+                proc = psutil.Process(pid)
+
+            if not proc.is_running():
+                raise psutil.NoSuchProcess(pid)
+
+            process_status = proc.status()
+            if process_status == psutil.STATUS_ZOMBIE:
+                raise psutil.NoSuchProcess(pid)
+
+            if is_new_proc:
+                proc.cpu_percent(interval=None)
+                cpu_percent = 0.0
+            else:
+                cpu_percent = round(proc.cpu_percent(interval=None), 2)
+
+            memory_mb = round(proc.memory_info().rss / (1024 * 1024), 2)
+            self._process_cache[pid] = {"proc": proc}
+
+            return {
+                "is_running": True,
+                "cpu_percent": cpu_percent,
+                "memory_mb": memory_mb,
+                "process_status": process_status
+            }
+        except Exception:
+            self._process_cache.pop(pid, None)
+            return {
+                "is_running": False,
+                "cpu_percent": 0.0,
+                "memory_mb": 0.0,
+                "process_status": "not_running"
+            }
+
     def _spawn_monitor(self, script_path: str, project_code: str):
         cmd = [sys.executable, script_path, project_code]
 
@@ -287,6 +338,8 @@ class MonitorService:
                     os.killpg(os.getpgid(pid), signal.SIGTERM)
             except Exception:
                 pass
+        finally:
+            self._process_cache.pop(pid, None)
 
     def stop_monitor(self, monitor_name: str):
         conn = self._connect_registry()
@@ -345,58 +398,122 @@ class MonitorService:
     def _get_latest_log(self, project_code: str, template_name: str):
         log_dir = self.get_project_log_dir(project_code, template_name)
         if not log_dir.exists():
+            self._log_cache.pop(str(log_dir), None)
             return {"timestamp": "", "message": ""}
-
-        log_files = sorted(log_dir.glob("*.log"), reverse=True)
-        if not log_files:
-            return {"timestamp": "", "message": ""}
-
-        latest_file = log_files[0]
 
         try:
-            with open(latest_file, "r", encoding="utf-8") as f:
-                lines = [line.strip() for line in f if line.strip()]
+            dir_key = str(log_dir)
+            dir_stat = log_dir.stat()
+            dir_mtime_ns = getattr(dir_stat, "st_mtime_ns", int(dir_stat.st_mtime * 1_000_000_000))
+            cached = self._log_cache.get(dir_key)
 
-            if not lines:
+            if cached:
+                cached_file = Path(cached["file_path"]) if cached.get("file_path") else None
+                if cached_file and cached_file.exists():
+                    file_stat = cached_file.stat()
+                    file_mtime_ns = getattr(file_stat, "st_mtime_ns", int(file_stat.st_mtime * 1_000_000_000))
+                    if (
+                        cached.get("dir_mtime_ns") == dir_mtime_ns
+                        and cached.get("file_mtime_ns") == file_mtime_ns
+                        and cached.get("file_size") == file_stat.st_size
+                    ):
+                        return {
+                            "timestamp": cached.get("timestamp", ""),
+                            "message": cached.get("message", "")
+                        }
+
+            latest_file = None
+            latest_file_mtime_ns = -1
+
+            for candidate in log_dir.glob("*.log"):
+                try:
+                    candidate_stat = candidate.stat()
+                except OSError:
+                    continue
+
+                candidate_mtime_ns = getattr(
+                    candidate_stat,
+                    "st_mtime_ns",
+                    int(candidate_stat.st_mtime * 1_000_000_000)
+                )
+
+                if candidate_mtime_ns > latest_file_mtime_ns:
+                    latest_file = candidate
+                    latest_file_mtime_ns = candidate_mtime_ns
+
+            if latest_file is None:
+                self._log_cache[dir_key] = {
+                    "dir_mtime_ns": dir_mtime_ns,
+                    "file_path": "",
+                    "file_mtime_ns": 0,
+                    "file_size": 0,
+                    "timestamp": "",
+                    "message": ""
+                }
                 return {"timestamp": "", "message": ""}
 
-            last_line = lines[-1]
-            parts = last_line.split("|", 1)
+            file_stat = latest_file.stat()
+            file_mtime_ns = getattr(file_stat, "st_mtime_ns", int(file_stat.st_mtime * 1_000_000_000))
+            last_line = self._read_last_nonempty_line(latest_file)
 
-            if len(parts) == 2:
-                return {
-                    "timestamp": parts[0].strip(),
-                    "message": parts[1].strip()
-                }
+            if not last_line:
+                result = {"timestamp": "", "message": ""}
+            else:
+                parts = last_line.split("|", 1)
+                if len(parts) == 2:
+                    result = {
+                        "timestamp": parts[0].strip(),
+                        "message": parts[1].strip()
+                    }
+                else:
+                    result = {
+                        "timestamp": "",
+                        "message": last_line
+                    }
 
-            return {
-                "timestamp": "",
-                "message": last_line
+            self._log_cache[dir_key] = {
+                "dir_mtime_ns": dir_mtime_ns,
+                "file_path": str(latest_file),
+                "file_mtime_ns": file_mtime_ns,
+                "file_size": file_stat.st_size,
+                "timestamp": result["timestamp"],
+                "message": result["message"]
             }
+
+            return result
         except Exception:
             return {"timestamp": "", "message": ""}
 
-    def _get_process_stats(self, pid):
-        if not self._is_pid_alive(pid):
-            return {
-                "cpu_percent": 0.0,
-                "memory_mb": 0.0,
-                "process_status": "not_running"
-            }
+    def _read_last_nonempty_line(self, file_path: Path, chunk_size: int = 4096):
+        with open(file_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
 
-        try:
-            proc = psutil.Process(pid)
-            return {
-                "cpu_percent": round(proc.cpu_percent(interval=0.05), 2),
-                "memory_mb": round(proc.memory_info().rss / (1024 * 1024), 2),
-                "process_status": proc.status()
-            }
-        except Exception:
-            return {
-                "cpu_percent": 0.0,
-                "memory_mb": 0.0,
-                "process_status": "unknown"
-            }
+            if file_size == 0:
+                return ""
+
+            buffer = b""
+            position = file_size
+
+            while position > 0:
+                read_size = min(chunk_size, position)
+                position -= read_size
+                f.seek(position)
+                buffer = f.read(read_size) + buffer
+
+                lines = buffer.splitlines()
+                if position > 0 and buffer[:1] not in {b"\n", b"\r"} and lines:
+                    buffer = lines[0]
+                    lines = lines[1:]
+                else:
+                    buffer = b""
+
+                for line in reversed(lines):
+                    text = line.decode("utf-8", errors="ignore").strip()
+                    if text:
+                        return text
+
+            return buffer.decode("utf-8", errors="ignore").strip()
 
     def list_monitors(self, project_code=None):
         conn = self._connect_registry()
@@ -414,7 +531,8 @@ class MonitorService:
 
         for row in rows:
             pid = row["pid"]
-            is_running = self._is_pid_alive(pid)
+            stats = self._get_process_snapshot(pid)
+            is_running = stats["is_running"]
 
             effective_status = row["status"]
             if pid and is_running:
@@ -422,7 +540,6 @@ class MonitorService:
             elif row["status"] == "running" and not is_running:
                 effective_status = "stopped"
 
-            stats = self._get_process_stats(pid)
             latest_log = self._get_latest_log(row["project_code"], row["template_name"])
 
             output.append({
@@ -445,11 +562,18 @@ class MonitorService:
 
         return output
 
-    def get_tracker_table_data(self, project_code: str, template_name: str):
+    def get_tracker_table_data(self, project_code: str, template_name: str, view_mode: str = "visible", limit: int = TRACKER_PREVIEW_ROWS):
         if not self._safe_name(project_code):
             raise ValueError("Invalid project_code")
         if not self._safe_name(template_name):
             raise ValueError("Invalid template_name")
+        if view_mode not in {"visible", "hidden", "all"}:
+            raise ValueError("Invalid view_mode")
+
+        try:
+            limit = max(1, min(int(limit), TRACKER_PREVIEW_ROWS))
+        except (TypeError, ValueError):
+            limit = TRACKER_PREVIEW_ROWS
 
         db_path = self.get_project_db_path(project_code, template_name)
         table_name = f"{template_name}_Tracker"
@@ -459,36 +583,60 @@ class MonitorService:
                 "columns": [],
                 "rows": [],
                 "table_name": table_name,
-                "id_columns": ["Job", "Milestone", "Block", "Stage"]
+                "id_columns": ["Job", "Milestone", "Block", "Stage"],
+                "row_limit": limit,
+                "displayed_rows": 0,
+                "has_more": False,
+                "view_mode": view_mode
             }
 
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
 
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
-        if not cur.fetchone():
+        try:
+            cur = conn.cursor()
+
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+            if not cur.fetchone():
+                return {
+                    "columns": [],
+                    "rows": [],
+                    "table_name": table_name,
+                    "id_columns": ["Job", "Milestone", "Block", "Stage"],
+                    "row_limit": limit,
+                    "displayed_rows": 0,
+                    "has_more": False,
+                    "view_mode": view_mode
+                }
+
+            cur.execute(f'PRAGMA table_info("{table_name}")')
+            info = cur.fetchall()
+            columns = [x["name"] for x in info]
+
+            has_hidden_column = "Hidden" in columns
+            where_sql = ""
+            params = []
+
+            if has_hidden_column and view_mode in {"visible", "hidden"}:
+                where_sql = ' WHERE COALESCE("Hidden", 0) = ?'
+                params.append(1 if view_mode == "hidden" else 0)
+
+            cur.execute(f'SELECT * FROM "{table_name}"{where_sql} LIMIT ?', params + [limit + 1])
+            fetched_rows = cur.fetchall()
+            has_more = len(fetched_rows) > limit
+            rows = [dict(r) for r in fetched_rows[:limit]]
+        finally:
             conn.close()
-            return {
-                "columns": [],
-                "rows": [],
-                "table_name": table_name,
-                "id_columns": ["Job", "Milestone", "Block", "Stage"]
-            }
-
-        cur.execute(f'PRAGMA table_info("{table_name}")')
-        info = cur.fetchall()
-        columns = [x["name"] for x in info]
-
-        cur.execute(f'SELECT * FROM "{table_name}"')
-        rows = [dict(r) for r in cur.fetchall()]
-        conn.close()
 
         return {
             "columns": columns,
             "rows": rows,
             "table_name": table_name,
-            "id_columns": ["Job", "Milestone", "Block", "Stage"]
+            "id_columns": ["Job", "Milestone", "Block", "Stage"],
+            "row_limit": limit,
+            "displayed_rows": len(rows),
+            "has_more": has_more,
+            "view_mode": view_mode
         }
 
     def _queue_template_action(self, project_code: str, template_name: str, run_rows, action_name: str):

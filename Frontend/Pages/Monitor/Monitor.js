@@ -5,10 +5,10 @@ let trackerColumns = [];
 let trackerIdColumns = ["Job", "Milestone", "Block", "Stage"];
 let autoRefreshHandle = null;
 let trackerViewMode = "visible";
+const TRACKER_PREVIEW_ROW_LIMIT = 100;
 
 document.addEventListener("DOMContentLoaded", async function () {
     try {
-        $(".ui.dropdown").dropdown();
         await loadProjects();
         await loadTemplates();
         bindEvents();
@@ -116,8 +116,6 @@ async function loadProjects() {
         opt.textContent = project;
         select.appendChild(opt);
     }
-
-    $(".ui.dropdown").dropdown("refresh");
 }
 
 async function loadTemplates() {
@@ -131,8 +129,6 @@ async function loadTemplates() {
         opt.textContent = item.template_name;
         select.appendChild(opt);
     }
-
-    $(".ui.dropdown").dropdown("refresh");
 }
 
 function getCurrentProject() {
@@ -345,8 +341,14 @@ async function loadTrackerFromCurrentSelection() {
 
 async function loadTrackerTable(project_code, template_name) {
     try {
+        const params = new URLSearchParams({
+            project_code,
+            template_name,
+            view_mode: trackerViewMode,
+            limit: String(TRACKER_PREVIEW_ROW_LIMIT)
+        });
         const data = await apiGet(
-            `/api/monitor/tracker?project_code=${encodeURIComponent(project_code)}&template_name=${encodeURIComponent(template_name)}`
+            `/api/monitor/tracker?${params.toString()}`
         );
 
         const payload = data.data || {};
@@ -361,7 +363,8 @@ async function loadTrackerTable(project_code, template_name) {
             rows,
             project_code,
             template_name,
-            payload.table_name || `${template_name}_Tracker`
+            payload.table_name || `${template_name}_Tracker`,
+            payload
         );
     } catch (err) {
         clearTrackerTable();
@@ -397,7 +400,7 @@ function clearTrackerTable() {
     if (meta) meta.textContent = "";
 }
 
-function renderTrackerTable(columns, rows, project_code, template_name, tableName) {
+function renderTrackerTable(columns, rows, project_code, template_name, tableName, payload = {}) {
     clearTrackerTable();
 
     const thead = document.querySelector("#tracker_table thead");
@@ -448,9 +451,15 @@ function renderTrackerTable(columns, rows, project_code, template_name, tableNam
     });
 
     const modeLabel = trackerViewMode === "hidden" ? "hidden only" : "visible only";
+    const previewLimit = Number(payload.row_limit) > 0 ? Number(payload.row_limit) : TRACKER_PREVIEW_ROW_LIMIT;
+    const displayedRows = Number(payload.displayed_rows);
+    const displayedText = Number.isFinite(displayedRows) ? displayedRows : rows.length;
+    const previewText = payload.has_more
+        ? `Preview: first ${displayedText} rows shown (max ${previewLimit})`
+        : `Rows shown: ${displayedText} (max ${previewLimit})`;
 
     document.getElementById("tracker_meta").textContent =
-        `Project: ${project_code} | Template: ${template_name} | DB: /proj/${project_code}/DashAI/DashAI_${template_name}.db | Table: ${tableName} | Row ID: ${trackerIdColumns.join(", ")} | View: ${modeLabel}`;
+        `Project: ${project_code} | Template: ${template_name} | DB: /proj/${project_code}/DashAI/DashAI_${template_name}.db | Table: ${tableName} | Row ID: ${trackerIdColumns.join(", ")} | View: ${modeLabel} | ${previewText}`;
 }
 
 function getSelectedRunRows() {

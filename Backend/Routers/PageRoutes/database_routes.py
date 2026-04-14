@@ -3,6 +3,7 @@ import os
 import sqlite3
 
 TEMPLATE_DIR = os.path.join("AppData", "Templates")
+MAX_PREVIEW_ROWS = 100
 
 def ensure_parent_dir(file_path):
     parent = os.path.dirname(file_path)
@@ -62,21 +63,7 @@ def get_db_info(db_path):
 def get_table_names(conn):
     cur = conn.cursor()
     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-    tables = []
-    for row in cur.fetchall():
-        table_name = row["name"]
-        tables.append({
-            "name": table_name,
-            "row_count": get_row_count(conn, table_name)
-        })
-    return tables
-
-
-def get_row_count(conn, table_name):
-    table_name = normalize_name(table_name)
-    cur = conn.cursor()
-    cur.execute(f"SELECT COUNT(*) AS cnt FROM {quote_identifier(table_name)}")
-    return cur.fetchone()["cnt"]
+    return [{"name": row["name"]} for row in cur.fetchall()]
 
 
 def get_create_sql(conn, table_name):
@@ -124,14 +111,23 @@ def get_table_schema(conn, table_name):
     }
 
 
-def get_table_data(conn, table_name, limit=5000):
+def get_table_data(conn, table_name, limit=MAX_PREVIEW_ROWS):
     table_name = normalize_name(table_name)
+    limit = max(1, int(limit))
     cur = conn.cursor()
-    cur.execute(f"SELECT * FROM {quote_identifier(table_name)} LIMIT {int(limit)}")
+    cur.execute(f"SELECT COUNT(*) AS cnt FROM {quote_identifier(table_name)}")
+    total_rows = cur.fetchone()["cnt"]
+    cur.execute(f"SELECT * FROM {quote_identifier(table_name)} LIMIT ?", (limit + 1,))
     rows = cur.fetchall()
+    has_more = len(rows) > limit
+    preview_rows = rows[:limit]
     return {
         "success": True,
-        "rows": [dict(row) for row in rows]
+        "rows": [dict(row) for row in preview_rows],
+        "total_rows": total_rows,
+        "displayed_rows": len(preview_rows),
+        "row_limit": limit,
+        "has_more": has_more
     }
 
 
@@ -396,19 +392,28 @@ def delete_record(conn, table_name, where):
     return cur.rowcount
 
 
-def run_query(conn, sql):
+def run_query(conn, sql, row_limit=MAX_PREVIEW_ROWS):
     if not str(sql).strip():
         raise Exception("SQL is required")
 
+    row_limit = max(1, int(row_limit))
     cur = conn.cursor()
     cur.execute(sql)
 
     if cur.description:
-        rows = cur.fetchall()
+        rows = cur.fetchmany(row_limit + 1)
+        has_more = len(rows) > row_limit
+        preview_rows = rows[:row_limit]
+        message = f"Query executed. Showing {len(preview_rows)} row(s)."
+        if has_more:
+            message = f"{message} Preview limited to the first {row_limit} rows."
         return {
             "success": True,
-            "rows": [dict(row) for row in rows],
-            "message": "Query executed"
+            "rows": [dict(row) for row in preview_rows],
+            "message": message,
+            "displayed_rows": len(preview_rows),
+            "row_limit": row_limit,
+            "has_more": has_more
         }
 
     conn.commit()
@@ -510,7 +515,8 @@ def handle_database_route(action, data):
             tables = get_table_names(conn)
             return {
                 "success": True,
-                "tables": tables
+                "tables": tables,
+                "preview_row_limit": MAX_PREVIEW_ROWS
             }
 
         if action == "table_schema":
