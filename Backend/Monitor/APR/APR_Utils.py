@@ -72,6 +72,24 @@ def get_timing_capture_command(rundir, stage, project_name):
     return cmd, env
 
 
+def get_timing_db_path(file_path, project_code, meta=None):
+    meta = meta or parse_log_args(file_path)
+    return os.path.join(
+        "/proj",
+        project_code,
+        "DashAI",
+        "APR_RUNS",
+        meta["Block"],
+        meta["Milestone"],
+        meta["Job"],
+        f"DashAI_{meta['Stage']}.db",
+    )
+
+
+def timing_db_exists_for_stage(file_path, project_code, meta=None):
+    return os.path.exists(get_timing_db_path(file_path, project_code, meta=meta))
+
+
 def get_run_directories(basepath, mindepth=DEFAULT_MINDEPTH, maxdepth=DEFAULT_MAXDEPTH, flow=DEFAULT_FLOW, tool=DEFAULT_TOOL):
     cmd = f'find {basepath} -mindepth {mindepth} -maxdepth {maxdepth} -type d -wholename "*/{flow}/{tool}/*"'
     result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

@@ -20,6 +20,7 @@ RE_STARTPOINT = re.compile(r'^\s*Beginpoint:\s*(.+)$', re.IGNORECASE)
 RE_ENDPOINT = re.compile(r'^\s*Endpoint:\s*(.+)$', re.IGNORECASE)
 RE_GROUP = re.compile(r'^\s*Path\s+Group\s*:\s*([^\s]+)$', re.IGNORECASE)
 RE_SLACK = re.compile(r'Slack\s+Time\s*([+\-]?\d+\.\d+)\s+(.+)$', re.IGNORECASE)
+SUMMARY_COLUMNS = ["Mode", "TCheck", "TCorner", "Voltage", "Pathgroup"]
 
 
 def get_voltage_list(design_file):
@@ -100,79 +101,63 @@ def get_timing_report_paths(rundir, stage):
     return results_list
 
 
-def init_db(db_path):
-    os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
-
-    conn = sqlite3.connect(db_path)
+def create_tables(conn):
     cur = conn.cursor()
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS APR_TIMING_SUMMARY (
-            Job TEXT,
-            Milestone TEXT,
-            Block TEXT,
-            Stage TEXT,
-            Mode TEXT,
-            Check TEXT,
-            Corner TEXT,
-            Voltage TEXT,
-            Pathgroup TEXT,
-            WNS REAL,
-            TNS REAL,
-            NVP INTEGER
+            "Mode" TEXT,
+            "TCheck" TEXT,
+            "TCorner" TEXT,
+            "Voltage" TEXT,
+            "Pathgroup" TEXT,
+            "WNS" REAL,
+            "TNS" REAL,
+            "NVP" INTEGER
         )
     """)
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS APR_TIMING_DETAIL (
-            Job TEXT,
-            Milestone TEXT,
-            Block TEXT,
-            Stage TEXT,
-            Mode TEXT,
-            Check TEXT,
-            Corner TEXT,
-            Voltage TEXT,
-            Pathgroup TEXT,
-            Slack REAL,
-            Endpoint TEXT,
-            Startpoint TEXT,
-            Timing TEXT,
-            Report TEXT
+            "Mode" TEXT,
+            "TCheck" TEXT,
+            "TCorner" TEXT,
+            "Voltage" TEXT,
+            "Pathgroup" TEXT,
+            "Slack" REAL,
+            "Endpoint" TEXT,
+            "Startpoint" TEXT,
+            "Timing" TEXT,
+            "Report" TEXT
         )
     """)
 
     cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_apr_timing_summary_main
-        ON APR_TIMING_SUMMARY(Job, Milestone, Block, Stage)
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_apr_timing_detail_main
-        ON APR_TIMING_DETAIL(Job, Milestone, Block, Stage)
+        CREATE INDEX IF NOT EXISTS idx_apr_timing_detail_filters
+        ON APR_TIMING_DETAIL("Mode", "TCheck", "TCorner", "Voltage", "Pathgroup", "Timing")
     """)
 
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_apr_timing_detail_endpoint
-        ON APR_TIMING_DETAIL(Endpoint)
+        ON APR_TIMING_DETAIL("Endpoint")
     """)
 
     conn.commit()
+
+
+def init_db(db_path):
+    os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+
+    conn = sqlite3.connect(db_path)
+    create_tables(conn)
     return conn
 
 
-def clear_existing_run_rows(conn, job, milestone, block, stage):
+def clear_existing_run_rows(conn):
     cur = conn.cursor()
 
-    cur.execute("""
-        DELETE FROM APR_TIMING_SUMMARY
-        WHERE Job = ? AND Milestone = ? AND Block = ? AND Stage = ?
-    """, (job, milestone, block, stage))
-
-    cur.execute("""
-        DELETE FROM APR_TIMING_DETAIL
-        WHERE Job = ? AND Milestone = ? AND Block = ? AND Stage = ?
-    """, (job, milestone, block, stage))
+    cur.execute("DROP TABLE IF EXISTS APR_TIMING_SUMMARY")
+    cur.execute("DROP TABLE IF EXISTS APR_TIMING_DETAIL")
 
     conn.commit()
 
@@ -181,13 +166,9 @@ def parse_report(reportpath):
     rows = []
     parts = parse_timing_args(reportpath)
 
-    job = parts[0]
-    milestone = parts[2]
-    block = parts[3]
-    stage = parts[6]
     mode = parts[7]
-    check = parts[8]
-    corner = parts[9]
+    tcheck = parts[8]
+    tcorner = parts[9]
     voltage = parts[10]
 
     try:
@@ -224,13 +205,9 @@ def parse_report(reportpath):
 
                 if startpoint and endpoint and pathgroup and slack is not None:
                     rows.append((
-                        job,
-                        milestone,
-                        block,
-                        stage,
                         mode,
-                        check,
-                        corner,
+                        tcheck,
+                        tcorner,
                         voltage,
                         pathgroup,
                         slack,
@@ -284,48 +261,36 @@ def insert_timing_detail(conn, rows):
     cur = conn.cursor()
     cur.executemany("""
         INSERT INTO APR_TIMING_DETAIL (
-            Job, Milestone, Block, Stage,
-            Mode, Check, Corner, Voltage, Pathgroup,
-            Slack, Endpoint, Startpoint, Timing, Report
+            "Mode", "TCheck", "TCorner", "Voltage", "Pathgroup",
+            "Slack", "Endpoint", "Startpoint", "Timing", "Report"
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, rows)
     conn.commit()
 
 
-def get_distinct_values(conn, job, milestone, block, stage, column_name):
-    cur = conn.cursor()
-    cur.execute(f"""
-        SELECT DISTINCT "{column_name}"
-        FROM APR_TIMING_DETAIL
-        WHERE Job = ? AND Milestone = ? AND Block = ? AND Stage = ?
-        ORDER BY "{column_name}"
-    """, (job, milestone, block, stage))
-    return [row[0] for row in cur.fetchall() if row[0] is not None]
+def get_report_combo(reportpath):
+    parts = parse_timing_args(reportpath)
+    return tuple(parts[idx] for idx in (7, 8, 9, 10, 11))
 
 
-def get_summary_options(conn, job, milestone, block, stage):
-    cols = ["Mode", "Check", "Corner", "Voltage", "Pathgroup"]
+def get_summary_options(report_combos):
     options = {}
 
-    for col in cols:
-        vals = get_distinct_values(conn, job, milestone, block, stage, col)
-        if col != "Check" and vals:
+    for idx, col in enumerate(SUMMARY_COLUMNS):
+        vals = sorted({combo[idx] for combo in report_combos if combo[idx] is not None})
+        if col != "TCheck" and vals:
             vals.append("all")
         options[col] = vals
 
-    return cols, options
+    return SUMMARY_COLUMNS, options
 
 
-def query_violated_summary(conn, job, milestone, block, stage, filters):
+def query_violated_summary(conn, filters):
     where = [
-        'Job = ?',
-        'Milestone = ?',
-        'Block = ?',
-        'Stage = ?',
         'Timing = "VIOLATED"'
     ]
-    params = [job, milestone, block, stage]
+    params = []
 
     for col, value in filters.items():
         if value != "all":
@@ -371,8 +336,12 @@ def query_violated_summary(conn, job, milestone, block, stage, filters):
     return wns, tns, nvp
 
 
-def insert_timing_summary(conn, job, milestone, block, stage):
-    cols, options = get_summary_options(conn, job, milestone, block, stage)
+def combo_has_exact_report(combo):
+    return all(value != "all" for value in combo)
+
+
+def insert_timing_summary(conn, report_combos):
+    cols, options = get_summary_options(report_combos)
 
     if not all(options.get(c) for c in cols):
         print("No data found for summary generation")
@@ -389,17 +358,17 @@ def insert_timing_summary(conn, job, milestone, block, stage):
     summary_rows = []
 
     for combo in combos:
+        if combo_has_exact_report(combo) and tuple(combo) not in report_combos:
+            print(f"Skipping combination without report file: {combo}")
+            continue
+
         filters = dict(zip(cols, combo))
-        wns, tns, nvp = query_violated_summary(conn, job, milestone, block, stage, filters)
+        wns, tns, nvp = query_violated_summary(conn, filters)
 
         summary_rows.append((
-            job,
-            milestone,
-            block,
-            stage,
             filters["Mode"],
-            filters["Check"],
-            filters["Corner"],
+            filters["TCheck"],
+            filters["TCorner"],
             filters["Voltage"],
             filters["Pathgroup"],
             wns,
@@ -413,16 +382,15 @@ def insert_timing_summary(conn, job, milestone, block, stage):
     cur = conn.cursor()
     cur.executemany("""
         INSERT INTO APR_TIMING_SUMMARY (
-            Job, Milestone, Block, Stage,
-            Mode, Check, Corner, Voltage, Pathgroup,
-            WNS, TNS, NVP
+            "Mode", "TCheck", "TCorner", "Voltage", "Pathgroup",
+            "WNS", "TNS", "NVP"
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, summary_rows)
     conn.commit()
 
 
-def summarize_stage_check(conn, job, milestone, block, stage, check_name):
+def summarize_stage_tcheck(conn, tcheck_name):
     query = """
         WITH ranked AS (
             SELECT
@@ -433,7 +401,7 @@ def summarize_stage_check(conn, job, milestone, block, stage, check_name):
                     ORDER BY Slack ASC, Endpoint ASC
                 ) AS rn
             FROM APR_TIMING_DETAIL
-            WHERE Job = ? AND Milestone = ? AND Block = ? AND Stage = ? AND Check = ?
+            WHERE "TCheck" = ?
         )
         SELECT
             MIN(Slack) AS WNS,
@@ -444,7 +412,7 @@ def summarize_stage_check(conn, job, milestone, block, stage, check_name):
     """
 
     cur = conn.cursor()
-    cur.execute(query, (job, milestone, block, stage, check_name))
+    cur.execute(query, (tcheck_name,))
     row = cur.fetchone()
 
     if not row or row[0] is None:
@@ -456,9 +424,9 @@ def summarize_stage_check(conn, job, milestone, block, stage, check_name):
     return wns, nvp, tns
 
 
-def print_stage_summary(conn, job, milestone, block, stage):
-    setup_wns, setup_nvp, setup_tns = summarize_stage_check(conn, job, milestone, block, stage, "SETUP")
-    hold_wns, hold_nvp, hold_tns = summarize_stage_check(conn, job, milestone, block, stage, "HOLD")
+def print_stage_summary(conn):
+    setup_wns, setup_nvp, setup_tns = summarize_stage_tcheck(conn, "SETUP")
+    hold_wns, hold_nvp, hold_tns = summarize_stage_tcheck(conn, "HOLD")
 
     print("Stage summary")
     print({
@@ -472,8 +440,6 @@ def print_stage_summary(conn, job, milestone, block, stage):
 
 
 def timing_db_per_stage(project_code, stage, rundir):
-    db_path = f"/proj/{project_code}/DashAI/DashAI_APR.db"
-
     reports = get_timing_report_paths(rundir, stage)
     print(f"Reports={reports}")
 
@@ -485,11 +451,14 @@ def timing_db_per_stage(project_code, stage, rundir):
     job = first_parts[0]
     milestone = first_parts[2]
     block = first_parts[3]
+    db_path = f"/proj/{project_code}/DashAI/APR_RUNS/{block}/{milestone}/{job}/DashAI_{stage}.db"
+    report_combos = {get_report_combo(report) for report in reports}
 
     conn = init_db(db_path)
 
-    print(f"Deleting old rows for Job={job}, Milestone={milestone}, Block={block}, Stage={stage}")
-    clear_existing_run_rows(conn, job, milestone, block, stage)
+    print(f"Dropping old timing tables in {db_path}")
+    clear_existing_run_rows(conn)
+    create_tables(conn)
 
     t0 = time.time()
 
@@ -501,9 +470,9 @@ def timing_db_per_stage(project_code, stage, rundir):
         insert_timing_detail(conn, timing_rows)
 
         print("Inserting APR_TIMING_SUMMARY")
-        insert_timing_summary(conn, job, milestone, block, stage)
+        insert_timing_summary(conn, report_combos)
 
-        print_stage_summary(conn, job, milestone, block, stage)
+        print_stage_summary(conn)
 
         timetaken = round(time.time() - t0, 2)
         hours = int(timetaken // 3600)
