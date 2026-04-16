@@ -4,7 +4,6 @@ let selectedMonitor = null;
 let trackerColumns = [];
 let trackerIdColumns = ["Job", "Milestone", "Block", "Stage"];
 let autoRefreshHandle = null;
-let trackerViewMode = "visible";
 const TRACKER_PREVIEW_ROW_LIMIT = 100;
 
 document.addEventListener("DOMContentLoaded", async function () {
@@ -39,7 +38,6 @@ function bindEvents() {
     });
 
     document.getElementById("project_select").addEventListener("change", async () => {
-        trackerViewMode = "visible";
         selectedMonitor = null;
         updateSelectedMonitorLabel();
         await refreshMonitors();
@@ -50,14 +48,6 @@ function bindEvents() {
         if (!selectedMonitor) {
             await loadTrackerFromCurrentSelection();
         }
-    });
-
-    document.getElementById("hide_runs_btn").addEventListener("click", async () => {
-        await handleRunAction("hide");
-    });
-
-    document.getElementById("unhide_runs_btn").addEventListener("click", async () => {
-        await handleUnhideFlow();
     });
 
     document.getElementById("update_runs_btn").addEventListener("click", async () => {
@@ -174,11 +164,7 @@ async function refreshMonitors(resetSelection = false) {
             updateSelectedMonitorLabel();
         } else if (selectedMonitor) {
             const updated = rows.find(r => r.monitor_name === selectedMonitor.monitor_name);
-            if (updated) {
-                selectedMonitor = updated;
-            } else {
-                selectedMonitor = null;
-            }
+            selectedMonitor = updated || null;
             updateSelectedMonitorLabel();
         }
     } catch (err) {
@@ -253,7 +239,6 @@ function bindMonitorRowEvents(rows) {
         if (!row) return;
 
         selectedMonitor = row;
-        trackerViewMode = "visible";
         updateSelectedMonitorLabel();
         await loadTrackerTable(row.project_code, row.template_name);
     });
@@ -264,8 +249,8 @@ function bindMonitorRowEvents(rows) {
         const monitor_name = this.getAttribute("data_name");
 
         try {
-            await apiPost("/api/monitor/start", { monitor_name });
-            showMessage(`Started ${monitor_name}`, "positive");
+            const response = await apiPost("/api/monitor/start", { monitor_name });
+            showMessage(`Status: ${response.data.status}`, "positive");
             await refreshMonitors();
         } catch (err) {
             showMessage(err.message, "negative");
@@ -278,8 +263,8 @@ function bindMonitorRowEvents(rows) {
         const monitor_name = this.getAttribute("data_name");
 
         try {
-            await apiPost("/api/monitor/restart", { monitor_name });
-            showMessage(`Restarted ${monitor_name}`, "positive");
+            const response = await apiPost("/api/monitor/restart", { monitor_name });
+            showMessage(`Status: ${response.data.status}`, "positive");
             await refreshMonitors();
         } catch (err) {
             showMessage(err.message, "negative");
@@ -292,16 +277,15 @@ function bindMonitorRowEvents(rows) {
         const monitor_name = this.getAttribute("data_name");
 
         try {
-            await apiPost("/api/monitor/terminate", { monitor_name });
+            const response = await apiPost("/api/monitor/terminate", { monitor_name });
 
-            if (selectedMonitor && selectedMonitor.monitor_name === monitor_name) {
+            if (selectedMonitor && selectedMonitor.monitor_name === monitor_name && response.data.status === "terminated") {
                 selectedMonitor = null;
-                trackerViewMode = "visible";
                 updateSelectedMonitorLabel();
                 clearTrackerTable();
             }
 
-            showMessage(`Terminated ${monitor_name}`, "positive");
+            showMessage(`Status: ${response.data.status}`, "positive");
             await refreshMonitors();
         } catch (err) {
             showMessage(err.message, "negative");
@@ -318,8 +302,7 @@ function updateSelectedMonitorLabel() {
         return;
     }
 
-    const modeText = trackerViewMode === "hidden" ? "Hidden Runs View" : "Visible Runs View";
-    label.textContent = `Selected: ${selectedMonitor.monitor_name} | ${modeText}`;
+    label.textContent = `Selected: ${selectedMonitor.monitor_name}`;
 }
 
 async function loadTrackerFromCurrentSelection() {
@@ -344,23 +327,17 @@ async function loadTrackerTable(project_code, template_name) {
         const params = new URLSearchParams({
             project_code,
             template_name,
-            view_mode: trackerViewMode,
             limit: String(TRACKER_PREVIEW_ROW_LIMIT)
         });
-        const data = await apiGet(
-            `/api/monitor/tracker?${params.toString()}`
-        );
+        const data = await apiGet(`/api/monitor/tracker?${params.toString()}`);
 
         const payload = data.data || {};
         trackerColumns = payload.columns || [];
         trackerIdColumns = payload.id_columns || ["Job", "Milestone", "Block", "Stage"];
 
-        let rows = payload.rows || [];
-        rows = filterRowsForCurrentMode(rows);
-
         renderTrackerTable(
             payload.columns || [],
-            rows,
+            payload.rows || [],
             project_code,
             template_name,
             payload.table_name || `${template_name}_Tracker`,
@@ -370,20 +347,6 @@ async function loadTrackerTable(project_code, template_name) {
         clearTrackerTable();
         showMessage(err.message, "negative");
     }
-}
-
-function filterRowsForCurrentMode(rows) {
-    if (!Array.isArray(rows)) return [];
-
-    if (!trackerColumns.includes("Hidden")) {
-        return rows;
-    }
-
-    if (trackerViewMode === "hidden") {
-        return rows.filter(row => Number(row.Hidden || 0) === 1);
-    }
-
-    return rows.filter(row => Number(row.Hidden || 0) === 0);
 }
 
 function clearTrackerTable() {
@@ -450,7 +413,6 @@ function renderTrackerTable(columns, rows, project_code, template_name, tableNam
         stateSave: true
     });
 
-    const modeLabel = trackerViewMode === "hidden" ? "hidden only" : "visible only";
     const previewLimit = Number(payload.row_limit) > 0 ? Number(payload.row_limit) : TRACKER_PREVIEW_ROW_LIMIT;
     const displayedRows = Number(payload.displayed_rows);
     const displayedText = Number.isFinite(displayedRows) ? displayedRows : rows.length;
@@ -459,7 +421,7 @@ function renderTrackerTable(columns, rows, project_code, template_name, tableNam
         : `Rows shown: ${displayedText} (max ${previewLimit})`;
 
     document.getElementById("tracker_meta").textContent =
-        `Project: ${project_code} | Template: ${template_name} | DB: /proj/${project_code}/DashAI/DashAI_${template_name}.db | Table: ${tableName} | Row ID: ${trackerIdColumns.join(", ")} | View: ${modeLabel} | ${previewText}`;
+        `Project: ${project_code} | Template: ${template_name} | DB: /proj/${project_code}/DashAI/DashAI_${template_name}.db | Table: ${tableName} | Row ID: ${trackerIdColumns.join(", ")} | ${previewText}`;
 }
 
 function getSelectedRunRows() {
@@ -476,73 +438,6 @@ function getSelectedRunRows() {
     return rows;
 }
 
-async function handleRunAction(action) {
-    const run_rows = getSelectedRunRows();
-
-    if (!selectedMonitor) {
-        showMessage("Select a monitor row first", "warning");
-        return;
-    }
-
-    if (!run_rows.length) {
-        showMessage("Select tracker rows first", "warning");
-        return;
-    }
-
-    try {
-        await apiPost("/api/monitor/hide_runs", {
-            project_code: selectedMonitor.project_code,
-            template_name: selectedMonitor.template_name,
-            run_rows,
-            action
-        });
-
-        showMessage(`${action} queued`, "positive");
-
-        if (action === "hide") {
-            trackerViewMode = "visible";
-        }
-
-        updateSelectedMonitorLabel();
-        await loadTrackerTable(selectedMonitor.project_code, selectedMonitor.template_name);
-    } catch (err) {
-        showMessage(err.message, "negative");
-    }
-}
-
-async function handleUnhideFlow() {
-    if (!selectedMonitor) {
-        showMessage("Select a monitor row first", "warning");
-        return;
-    }
-
-    const run_rows = getSelectedRunRows();
-
-    if (!run_rows.length) {
-        trackerViewMode = "hidden";
-        updateSelectedMonitorLabel();
-        await loadTrackerTable(selectedMonitor.project_code, selectedMonitor.template_name);
-        showMessage("Hidden runs loaded. Select rows to add back.", "info");
-        return;
-    }
-
-    try {
-        await apiPost("/api/monitor/hide_runs", {
-            project_code: selectedMonitor.project_code,
-            template_name: selectedMonitor.template_name,
-            run_rows,
-            action: "unhide"
-        });
-
-        showMessage("unhide queued", "positive");
-        trackerViewMode = "visible";
-        updateSelectedMonitorLabel();
-        await loadTrackerTable(selectedMonitor.project_code, selectedMonitor.template_name);
-    } catch (err) {
-        showMessage(err.message, "negative");
-    }
-}
-
 async function handleUpdateRuns() {
     const run_rows = getSelectedRunRows();
 
@@ -557,13 +452,13 @@ async function handleUpdateRuns() {
     }
 
     try {
-        await apiPost("/api/monitor/update_runs", {
+        const response = await apiPost("/api/monitor/update_runs", {
             project_code: selectedMonitor.project_code,
             template_name: selectedMonitor.template_name,
             run_rows
         });
 
-        showMessage("Update queued", "positive");
+        showMessage(`Queued ${response.data.queued} re-extract request(s)`, "positive");
         await loadTrackerTable(selectedMonitor.project_code, selectedMonitor.template_name);
     } catch (err) {
         showMessage(err.message, "negative");

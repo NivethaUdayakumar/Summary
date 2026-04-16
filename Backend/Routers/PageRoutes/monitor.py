@@ -103,27 +103,11 @@ def monitor_list():
 def monitor_tracker():
     project_code = (request.args.get("project_code") or "").strip()
     template_name = (request.args.get("template_name") or "").strip()
-    view_mode = (request.args.get("view_mode") or "visible").strip().lower()
     limit = request.args.get("limit", type=int)
 
     try:
-        data = service.get_tracker_table_data(project_code, template_name, view_mode=view_mode, limit=limit)
+        data = service.get_tracker_table_data(project_code, template_name, view_mode="visible", limit=limit)
         return jsonify({"ok": True, "data": data})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-
-
-@monitor_bp.route("/api/monitor/hide_runs", methods=["POST"])
-def monitor_hide_runs():
-    data = request.get_json(force=True)
-    project_code = (data.get("project_code") or "").strip()
-    template_name = (data.get("template_name") or "").strip()
-    run_rows = data.get("run_rows") or []
-    action = (data.get("action") or "hide").strip()
-
-    try:
-        result = service.hide_or_unhide_runs(project_code, template_name, run_rows, action)
-        return jsonify({"ok": True, "data": result})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 400
 

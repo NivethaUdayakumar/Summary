@@ -96,7 +96,7 @@ class MonitorService:
             templates.append({
                 "template_name": template_name,
                 "script_path": str(main_script),
-                "has_hide_runs": True,
+                "has_hide_runs": False,
                 "has_update_run": True
             })
 
@@ -143,7 +143,10 @@ class MonitorService:
             return defs_module.make_key(job, milestone, block, stage)
         if hasattr(defs_module, "make_state_key"):
             return defs_module.make_state_key(job, milestone, block, stage)
-        return f"{job}-{milestone}-{block}-{stage}"
+        return f"{job}--{milestone}--{block}--{stage}"
+
+    def _supports_graceful_shutdown(self, template_name: str):
+        return template_name == "APR"
 
     def create_monitor(self, project_code: str, template_name: str):
         if not self._safe_name(project_code):
@@ -281,7 +284,7 @@ class MonitorService:
             return {
                 "monitor_name": monitor_name,
                 "pid": pid,
-                "status": "running"
+                "status": row["status"] if row["status"] in {"stopping", "terminating"} else "running"
             }
 
         new_pid = self._spawn_monitor(row["script_path"], row["project_code"])
@@ -341,6 +344,24 @@ class MonitorService:
         finally:
             self._process_cache.pop(pid, None)
 
+    def _request_pid_shutdown(self, pid: int):
+        if not pid:
+            return False
+
+        try:
+            proc = psutil.Process(pid)
+        except Exception:
+            return False
+
+        try:
+            if os.name == "nt" and hasattr(signal, "CTRL_BREAK_EVENT"):
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                proc.terminate()
+            return True
+        except Exception:
+            return False
+
     def stop_monitor(self, monitor_name: str):
         conn = self._connect_registry()
         cur = conn.cursor()
@@ -351,6 +372,23 @@ class MonitorService:
             raise FileNotFoundError("Monitor not found")
 
         pid = row["pid"]
+        if pid and self._supports_graceful_shutdown(row["template_name"]) and self._is_pid_alive(pid):
+            self._request_pid_shutdown(pid)
+            now = self._now()
+            cur.execute("""
+                UPDATE monitor_registry
+                SET status = ?, updated_at = ?
+                WHERE monitor_name = ?
+            """, ("stopping", now, monitor_name))
+            conn.commit()
+            conn.close()
+
+            return {
+                "monitor_name": monitor_name,
+                "status": "stopping",
+                "pid": pid
+            }
+
         if pid:
             self._kill_pid(pid)
 
@@ -369,7 +407,9 @@ class MonitorService:
         }
 
     def restart_monitor(self, monitor_name: str):
-        self.stop_monitor(monitor_name)
+        stop_result = self.stop_monitor(monitor_name)
+        if stop_result["status"] != "stopped":
+            return stop_result
         time.sleep(0.3)
         return self.start_monitor(monitor_name)
 
@@ -383,6 +423,23 @@ class MonitorService:
             raise FileNotFoundError("Monitor not found")
 
         pid = row["pid"]
+        if pid and self._supports_graceful_shutdown(row["template_name"]) and self._is_pid_alive(pid):
+            self._request_pid_shutdown(pid)
+            now = self._now()
+            cur.execute("""
+                UPDATE monitor_registry
+                SET status = ?, updated_at = ?
+                WHERE monitor_name = ?
+            """, ("terminating", now, monitor_name))
+            conn.commit()
+            conn.close()
+
+            return {
+                "monitor_name": monitor_name,
+                "status": "terminating",
+                "pid": pid
+            }
+
         if pid:
             self._kill_pid(pid)
 
@@ -528,6 +585,7 @@ class MonitorService:
         conn.close()
 
         output = []
+        cleanup_rows = []
 
         for row in rows:
             pid = row["pid"]
@@ -536,9 +594,14 @@ class MonitorService:
 
             effective_status = row["status"]
             if pid and is_running:
-                effective_status = "running"
+                effective_status = row["status"] if row["status"] in {"stopping", "terminating"} else "running"
             elif row["status"] == "running" and not is_running:
                 effective_status = "stopped"
+            elif row["status"] == "stopping" and not is_running:
+                effective_status = "stopped"
+            elif row["status"] == "terminating" and not is_running:
+                cleanup_rows.append(row["monitor_name"])
+                continue
 
             latest_log = self._get_latest_log(row["project_code"], row["template_name"])
 
@@ -556,9 +619,19 @@ class MonitorService:
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "last_started_at": row["last_started_at"] or "",
-                "has_hide_runs": True,
+                "has_hide_runs": False,
                 "has_update_run": True
             })
+
+        if cleanup_rows:
+            conn = self._connect_registry()
+            cur = conn.cursor()
+            cur.executemany(
+                "DELETE FROM monitor_registry WHERE monitor_name = ?",
+                [(name,) for name in cleanup_rows],
+            )
+            conn.commit()
+            conn.close()
 
         return output
 
@@ -567,7 +640,7 @@ class MonitorService:
             raise ValueError("Invalid project_code")
         if not self._safe_name(template_name):
             raise ValueError("Invalid template_name")
-        if view_mode not in {"visible", "hidden", "all"}:
+        if view_mode not in {"visible", "all"}:
             raise ValueError("Invalid view_mode")
 
         try:
@@ -612,19 +685,17 @@ class MonitorService:
             cur.execute(f'PRAGMA table_info("{table_name}")')
             info = cur.fetchall()
             columns = [x["name"] for x in info]
+            try:
+                _, defs = self._load_template_modules(template_name)
+                preferred_columns = list(getattr(defs, "TRACKER_COLUMNS", [])) + list(getattr(defs, "KPI_COLUMNS", []))
+                columns = [col for col in preferred_columns if col in columns]
+            except Exception:
+                columns = [col for col in columns if col not in {"Project", "Hidden"}]
 
-            has_hidden_column = "Hidden" in columns
-            where_sql = ""
-            params = []
-
-            if has_hidden_column and view_mode in {"visible", "hidden"}:
-                where_sql = ' WHERE COALESCE("Hidden", 0) = ?'
-                params.append(1 if view_mode == "hidden" else 0)
-
-            cur.execute(f'SELECT * FROM "{table_name}"{where_sql} LIMIT ?', params + [limit + 1])
+            cur.execute(f'SELECT * FROM "{table_name}" LIMIT ?', [limit + 1])
             fetched_rows = cur.fetchall()
             has_more = len(fetched_rows) > limit
-            rows = [dict(r) for r in fetched_rows[:limit]]
+            rows = [{col: r[col] for col in columns} for r in fetched_rows[:limit]]
         finally:
             conn.close()
 
@@ -639,60 +710,67 @@ class MonitorService:
             "view_mode": view_mode
         }
 
-    def _queue_template_action(self, project_code: str, template_name: str, run_rows, action_name: str):
+    def _get_force_extract_file(self, project_code: str, defs_module):
+        state_dir_name = getattr(defs_module, "STATE_DIR", "States")
+        force_file_name = getattr(defs_module, "FORCE_EXTRACT_FILE_NAME", None)
+        if not force_file_name:
+            raise AttributeError("Template does not define FORCE_EXTRACT_FILE_NAME")
+
+        state_dir = PROJECTS_BASE_DIR / project_code / "DashAI" / state_dir_name
+        state_dir.mkdir(parents=True, exist_ok=True)
+        return state_dir / force_file_name
+
+    def _queue_force_extract_runs(self, project_code: str, template_name: str, run_rows):
         if not self._safe_name(project_code):
             raise ValueError("Invalid project_code")
         if not self._safe_name(template_name):
             raise ValueError("Invalid template_name")
 
-        db_ops, defs = self._load_template_modules(template_name)
-        db_file = self.get_project_db_path(project_code, template_name)
+        _, defs = self._load_template_modules(template_name)
+        force_extract_file = self._get_force_extract_file(project_code, defs)
 
-        if not db_file.exists():
-            raise FileNotFoundError(f"DB not found: {db_file}")
+        existing = []
+        if force_extract_file.exists():
+            existing = [
+                line.strip()
+                for line in force_extract_file.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
 
-        if not hasattr(db_ops, "connect_db_file"):
-            raise AttributeError(f"{template_name}_DB_Operations.py is missing connect_db_file()")
-
-        conn = db_ops.connect_db_file(str(db_file))
-
+        existing_set = set(existing)
         queued = 0
-        try:
-            for row in run_rows:
-                job = str(row.get("Job", "")).strip()
-                milestone = str(row.get("Milestone", "")).strip()
-                block = str(row.get("Block", "")).strip()
-                stage = str(row.get("Stage", "")).strip()
 
-                if not all([job, milestone, block, stage]):
-                    continue
+        for row in run_rows:
+            job = str(row.get("Job", "")).strip()
+            milestone = str(row.get("Milestone", "")).strip()
+            block = str(row.get("Block", "")).strip()
+            stage = str(row.get("Stage", "")).strip()
 
-                state_key = self._make_state_key(defs, job, milestone, block, stage)
+            if not all([job, milestone, block, stage]):
+                continue
 
-                if action_name == "hide":
-                    db_ops.request_remove(conn, state_key)
-                elif action_name == "unhide":
-                    db_ops.request_add_back(conn, state_key)
-                elif action_name == "update":
-                    db_ops.request_reupdate(conn, state_key)
-                else:
-                    raise ValueError("Invalid action")
+            state_key = self._make_state_key(defs, job, milestone, block, stage)
+            if state_key in existing_set:
+                continue
 
-                queued += 1
-        finally:
-            conn.close()
+            existing.append(state_key)
+            existing_set.add(state_key)
+            queued += 1
+
+        payload = "\n".join(existing) + ("\n" if existing else "")
+        tmp_file = force_extract_file.with_suffix(force_extract_file.suffix + ".tmp")
+        tmp_file.write_text(payload, encoding="utf-8")
+        tmp_file.replace(force_extract_file)
 
         return {
             "queued": queued,
-            "action": action_name,
+            "action": "update",
             "project_code": project_code,
             "template_name": template_name
         }
 
     def hide_or_unhide_runs(self, project_code: str, template_name: str, run_rows, action: str):
-        if action not in {"hide", "unhide"}:
-            raise ValueError("Invalid action")
-        return self._queue_template_action(project_code, template_name, run_rows, action)
+        raise ValueError("Hide and unhide are not supported for this monitor")
 
     def update_runs(self, project_code: str, template_name: str, run_rows):
-        return self._queue_template_action(project_code, template_name, run_rows, "update")
+        return self._queue_force_extract_runs(project_code, template_name, run_rows)
