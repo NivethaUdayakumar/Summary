@@ -1,13 +1,15 @@
 (function () {
+    var KPI_COLUMNS = (window.APR_TRACKER_KPI_COLUMNS || []).slice();
+
     window.APR_TRACKER_PRESETS = {
         default: {
             hiddenColumns: []
         },
-        hideOwner: {
-            hiddenColumns: ['owner']
+        trackerOnly: {
+            hiddenColumns: KPI_COLUMNS
         },
-        hideName: {
-            hiddenColumns: ['workstream']
+        kpiFocus: {
+            hiddenColumns: ['Dft_release', 'User', 'Created', 'Modified', 'Comments', 'Promote']
         }
     };
 

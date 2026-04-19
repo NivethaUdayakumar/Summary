@@ -491,7 +491,7 @@ def timing_db_per_stage(project_code, stage, rundir):
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
-        print("Usage: python timing_apr_innovus.py <project_code> <stage> <rundir>")
+        print("Usage: python TIMING.py <project_code> <stage> <rundir>")
         sys.exit(1)
 
     project_code = sys.argv[1]

@@ -1,6 +1,13 @@
 from flask import jsonify, request
 from Backend.Routers.PageRoutes.database_routes import handle_database_route
-from Backend.Routers.PageRoutes import auth, manage_tab, python_exec, session as session_routes, table
+from Backend.Routers.PageRoutes import (
+    apr_watchlist,
+    auth,
+    manage_tab,
+    python_exec,
+    session as session_routes,
+    table,
+)
 from Backend.Routers.PageRoutes.monitor import monitor_bp
     
 def register_routes(app):
@@ -89,6 +96,34 @@ def register_routes(app):
     @app.route('/api/delete-record', methods=['POST'])
     def delete_record_route():
         return jsonify(table.delete_record(request.get_json(silent=True) or {}))
+
+    # =========================
+    # APR WATCHLIST
+    # =========================
+    @app.route('/api/apr-watchlist', methods=['GET'])
+    def apr_watchlist_route():
+        payload, status_code = apr_watchlist.get_watchlists()
+        return jsonify(payload), status_code
+
+    @app.route('/api/apr-watchlist/create-watchlist', methods=['POST'])
+    def apr_watchlist_create_route():
+        payload, status_code = apr_watchlist.create_watchlist(request.get_json(silent=True) or {})
+        return jsonify(payload), status_code
+
+    @app.route('/api/apr-watchlist/delete-watchlist', methods=['POST'])
+    def apr_watchlist_delete_route():
+        payload, status_code = apr_watchlist.delete_watchlist(request.get_json(silent=True) or {})
+        return jsonify(payload), status_code
+
+    @app.route('/api/apr-watchlist/add-run', methods=['POST'])
+    def apr_watchlist_add_run_route():
+        payload, status_code = apr_watchlist.add_run(request.get_json(silent=True) or {})
+        return jsonify(payload), status_code
+
+    @app.route('/api/apr-watchlist/delete-run', methods=['POST'])
+    def apr_watchlist_delete_run_route():
+        payload, status_code = apr_watchlist.delete_run(request.get_json(silent=True) or {})
+        return jsonify(payload), status_code
 
     # =========================
     # PYTHON EXEC

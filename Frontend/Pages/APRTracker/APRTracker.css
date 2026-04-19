@@ -1,7 +1,7 @@
 html,
 body {
   height: 100%;
-  margin: 0;
+  margin: 10px;
 }
 
 table.dataTable td,
@@ -14,7 +14,8 @@ th.dt-body-right {
 }
 
 body {
-  font-family: Lato, 'Helvetica Neue', Arial, Helvetica, sans-serif;
+  margin: 16px;
+  font-family: Arial, sans-serif;
   background: #f5f7fa;
   color: #1b1c1d;
 }
@@ -62,4 +63,75 @@ body {
 .apr-tracker-table {
   width: 100%;
   margin-top: 0.5rem !important;
+}
+
+.apr-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.apr-toolbar .item-label {
+  font-weight: 600;
+}
+
+.dt-actions {
+  white-space: nowrap;
+  position: relative;
+}
+
+.dt-actions .ui.button,
+.dt-actions .apr-action-menu {
+  margin-right: 4px;
+}
+
+.apr-action-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.dt-actions.is-menu-open {
+  z-index: 6 !important;
+}
+
+.dt-actions.is-menu-open .apr-action-menu,
+.dt-actions.is-menu-open .apr-action-menu-list {
+  z-index: 7;
+}
+
+.apr-action-menu summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.apr-action-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.apr-action-menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid rgba(34, 36, 38, 0.15);
+  border-radius: 0.28571429rem;
+  background: #ffffff;
+  box-shadow: 0 2px 12px rgba(34, 36, 38, 0.15);
+}
+
+.apr-action-menu-item {
+  width: 100%;
+  margin: 0 !important;
+  text-align: left;
+}
+
+#aprTrackerTable {
+  width: 100%;
 }

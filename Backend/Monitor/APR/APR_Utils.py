@@ -64,7 +64,7 @@ def extract_apr_kpi(path):
 
 
 def get_timing_capture_command(rundir, stage, project_name):
-    proc_py = os.path.join(os.path.dirname(__file__), "timing_apr_innovus.py")
+    proc_py = os.path.join(os.path.dirname(__file__), "TIMING.py")
     py = "python3" if os.name != "nt" else "py"
     cmd = f'module load Python3/3.11.1 && utilq -Is {py} "{proc_py}" "{project_name}" "{stage}" "{rundir}"'
     env = os.environ.copy()

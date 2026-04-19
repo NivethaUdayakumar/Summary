@@ -6,6 +6,6 @@ window.APR_BUTTONS.push({
     className: 'ui mini button',
     handler: function (row) {
         console.log('Export row', row);
-        alert('Export row item_code: ' + row.item_code);
+        alert('Export row: ' + window.getAPRTrackerRowLabel(row));
     }
 });

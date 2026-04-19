@@ -169,13 +169,13 @@
                 info: true,
                 pageLength: 10,
                 lengthChange: true,
-                order: [[0, 'asc']],
+                order: [[8, 'desc']],
                 autoWidth: true,
                 responsive: false,
                 stateSave: true,
                 scrollX: true,
                 fixedColumns: {
-                    left: 1
+                    left: 2
                 },
                 columnDefs: window.getAPRTrackerColumnDefs(listDropdown, dateDropdown, floatDropdown)
             },

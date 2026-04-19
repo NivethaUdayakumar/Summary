@@ -1,10 +1,10 @@
 window.APR_BUTTONS = window.APR_BUTTONS || [];
 
 window.APR_BUTTONS.push({
-    id: 'edit',
-    label: 'Edit',
+    id: 'promote',
+    label: 'Promote',
     className: 'ui mini button',
     handler: function (row) {
-        alert('Edit row item_code: ' + row.item_code);
+        alert('Promote row: ' + JSON.stringify(row, null, 2));
     }
 });

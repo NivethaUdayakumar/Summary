@@ -6,6 +6,6 @@ window.APR_BUTTONS.push({
     className: 'ui mini button',
     handler: function (row) {
         console.log('History row', row);
-        alert('History row item_code: ' + row.item_code);
+        alert('History row: ' + window.getAPRTrackerRowLabel(row));
     }
 });

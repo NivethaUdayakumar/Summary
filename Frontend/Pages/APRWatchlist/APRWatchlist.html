@@ -8,17 +8,84 @@
   <link rel="stylesheet" href="/static/Pages/APRWatchlist/APRWatchlist.css" />
 </head>
 <body>
-  <div class="content-page-shell">
-    <div class="ui raised segment content-page-panel">
-      <h1 class="ui header">APR Watchlist</h1>
-      <p class="content-page-copy">Use the watchlist to monitor high-risk APR items, dependencies, and exceptions that need extra attention.</p>
-      <div class="ui three stackable cards content-page-cards">
-        <div class="card"><div class="content"><div class="header">Hot Items</div><div class="description">Highlight the items that need immediate action or a decision.</div></div></div>
-        <div class="card"><div class="content"><div class="header">Dependencies</div><div class="description">Track upstream and downstream dependencies that affect APR delivery.</div></div></div>
-        <div class="card"><div class="content"><div class="header">Escalations</div><div class="description">Keep a concise list of issues that require leadership visibility.</div></div></div>
+  <div class="watchlist-shell">
+    <aside class="watchlist-sidebar">
+      <div class="watchlist-brand">
+        <p class="watchlist-eyebrow">APR Monitor</p>
+        <h1>Watchlists</h1>
+        <p class="watchlist-copy">Create user-specific watchlists, keep the default weekly queue, and cap the number of runs tracked per block.</p>
       </div>
-    </div>
+
+      <div class="watchlist-user-bar">
+        <span class="watchlist-user-label">Signed in as</span>
+        <strong id="watchlistUserId">-</strong>
+      </div>
+
+      <form id="createWatchlistForm" class="watchlist-create-form">
+        <label for="newWatchlistName">Create a watchlist</label>
+        <div class="watchlist-inline-form">
+          <input id="newWatchlistName" type="text" maxlength="80" placeholder="Tapeout Focus" />
+          <button type="submit" class="ui primary button">Create</button>
+        </div>
+      </form>
+
+      <div class="watchlist-list-wrap">
+        <div class="watchlist-section-title">Available watchlists</div>
+        <div id="watchlistList" class="watchlist-list"></div>
+      </div>
+    </aside>
+
+    <main class="watchlist-main">
+      <div id="watchlistMessage" class="watchlist-message is-hidden"></div>
+
+      <section id="selectedRunPanel" class="watchlist-panel is-hidden">
+        <div class="watchlist-panel-header">
+          <div>
+            <p class="watchlist-panel-eyebrow">Selected APR Run</p>
+            <h2>Add from APR Tracker</h2>
+          </div>
+          <button id="addSelectedRunButton" type="button" class="ui primary button">Add To Current Watchlist</button>
+        </div>
+        <div id="selectedRunSummary" class="watchlist-run-summary"></div>
+      </section>
+
+      <section class="watchlist-panel">
+        <div class="watchlist-panel-header">
+          <div>
+            <p class="watchlist-panel-eyebrow">Current Watchlist</p>
+            <h2 id="activeWatchlistName">APR Weekly</h2>
+            <p id="activeWatchlistMeta" class="watchlist-panel-copy"></p>
+          </div>
+          <button id="deleteWatchlistButton" type="button" class="ui button negative">Delete Watchlist</button>
+        </div>
+
+        <div id="activeWatchlistLimits" class="watchlist-limit-note"></div>
+        <div id="activeWatchlistBlocks" class="watchlist-block-badges"></div>
+
+        <div class="watchlist-table-wrap">
+          <table class="ui celled table watchlist-table">
+            <thead>
+              <tr>
+                <th>Job</th>
+                <th>Milestone</th>
+                <th>Block</th>
+                <th>Stage</th>
+                <th>Status</th>
+                <th>Promote</th>
+                <th>Added</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="watchlistItemsBody"></tbody>
+          </table>
+          <div id="watchlistEmptyState" class="watchlist-empty-state is-hidden">
+            No runs are currently saved in this watchlist.
+          </div>
+        </div>
+      </section>
+    </main>
   </div>
+
   <script src="/static/Pages/APRWatchlist/APRWatchlist.js"></script>
 </body>
 </html>

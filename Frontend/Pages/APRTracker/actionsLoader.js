@@ -9,6 +9,33 @@
             .replace(/>/g, '&gt;');
     }
 
+    function getActionCell(element) {
+        return element ? element.closest('td.dt-actions, th.dt-actions') : null;
+    }
+
+    function setActionCellOpenState(cell, isOpen) {
+        if (!cell) return;
+        cell.classList.toggle('is-menu-open', Boolean(isOpen));
+    }
+
+    function closeSiblingMenus(tableEl, currentMenu) {
+        tableEl.querySelectorAll('details.apr-action-menu[open]').forEach(function (menu) {
+            if (menu === currentMenu) return;
+            menu.open = false;
+            setActionCellOpenState(getActionCell(menu), false);
+        });
+    }
+
+    function syncActionMenuState(tableEl, menu) {
+        if (!menu) return;
+
+        if (menu.open) {
+            closeSiblingMenus(tableEl, menu);
+        }
+
+        setActionCellOpenState(getActionCell(menu), menu.open);
+    }
+
     window.buildAPRActionColumn = function () {
         return {
             data: null,
@@ -53,11 +80,28 @@
         };
     };
 
+    window.getAPRTrackerRowLabel = function (row) {
+        return [row.Job, row.Milestone, row.Block, row.Stage]
+            .filter(function (value) {
+                return value;
+            })
+            .join(' / ');
+    };
+
     window.bindAPRActionEvents = function (tableBuilder) {
         var tableEl = document.querySelector(tableBuilder.selector);
         if (!tableEl) return;
 
         tableEl.addEventListener('click', function (event) {
+            var summaryEl = event.target.closest('.apr-action-menu > summary');
+            if (summaryEl) {
+                var summaryMenu = summaryEl.parentElement;
+                window.requestAnimationFrame(function () {
+                    syncActionMenuState(tableEl, summaryMenu);
+                });
+                return;
+            }
+
             var actionEl = event.target.closest('[data-apr-action]');
             if (!actionEl) return;
 
@@ -82,6 +126,7 @@
             var menu = actionEl.closest('details');
             if (menu) {
                 menu.open = false;
+                setActionCellOpenState(getActionCell(menu), false);
             }
         });
     };

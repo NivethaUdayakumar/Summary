@@ -8,74 +8,6 @@
     <link rel="stylesheet" href="/static/Pages/APRTracker/APRTracker.css" />
     <link rel="stylesheet" href="/static/Vendor/datatables/datatables.min.css" />
     <link rel="stylesheet" href="/static/Vendor/semantic-ui/semantic.min.css" />
-
-    <style>
-        body {
-            margin: 16px;
-            font-family: Arial, sans-serif;
-        }
-
-        .apr-toolbar {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 12px;
-            flex-wrap: wrap;
-        }
-
-        .apr-toolbar .item-label {
-            font-weight: 600;
-        }
-
-        .dt-actions {
-            white-space: nowrap;
-        }
-
-        .dt-actions .ui.button,
-        .dt-actions .apr-action-menu {
-            margin-right: 4px;
-        }
-
-        .apr-action-menu {
-            position: relative;
-            display: inline-block;
-        }
-
-        .apr-action-menu summary {
-            list-style: none;
-            cursor: pointer;
-        }
-
-        .apr-action-menu summary::-webkit-details-marker {
-            display: none;
-        }
-
-        .apr-action-menu-list {
-            position: absolute;
-            top: calc(100% + 4px);
-            right: 0;
-            z-index: 20;
-            min-width: 140px;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            padding: 8px;
-            border: 1px solid rgba(34, 36, 38, 0.15);
-            border-radius: 0.28571429rem;
-            background: #ffffff;
-            box-shadow: 0 2px 12px rgba(34, 36, 38, 0.15);
-        }
-
-        .apr-action-menu-item {
-            width: 100%;
-            margin: 0 !important;
-            text-align: left;
-        }
-
-        #aprTrackerTable {
-            width: 100%;
-        }
-    </style>
 </head>
 <body>
 
@@ -83,8 +15,8 @@
         <div class="item-label">Preset</div>
         <select id="presetSelect" class="ui dropdown">
             <option value="default">Default</option>
-            <option value="hideOwner">Hide Owner</option>
-            <option value="hideName">Hide Name</option>
+            <option value="trackerOnly">Tracker Only</option>
+            <option value="kpiFocus">KPI Focus</option>
         </select>
 
         <button id="clearFiltersBtn" class="ui button">Clear All Applied Filters</button>
@@ -98,8 +30,8 @@
 
     <script src="/static/AdvancedBuilders/AdvancedTable/AdvancedTable.js"></script>
 
-    <script src="/static/Pages/APRTracker/Buttons/view.js"></script>
-    <script src="/static/Pages/APRTracker/Buttons/edit.js"></script>
+    <script src="/static/Pages/APRTracker/Buttons/promote.js"></script>
+    <script src="/static/Pages/APRTracker/Buttons/watchlist.js"></script>
     <script src="/static/Pages/APRTracker/Buttons/delete.js"></script>
     <script src="/static/Pages/APRTracker/Buttons/export.js"></script>
     <script src="/static/Pages/APRTracker/Buttons/history.js"></script>
