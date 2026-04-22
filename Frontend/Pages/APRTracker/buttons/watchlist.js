@@ -1,988 +1,719 @@
 window.APR_BUTTONS = window.APR_BUTTONS || [];
 
-(function () {
-    var DB_LOCATION = 'AppData/App.db';
-    var WATCHLIST_TABLE = 'apr_watchlist';
-    var WEEKLY_TABLE = 'apr_weekly';
-    var DEFAULT_WATCHLIST = 'APR Weekly';
-    var WATCHLIST_RECORD = 'watchlist';
-    var RUN_RECORD = 'run';
-    var CURRENT_WEEK_LIMIT = 3;
-    var RUN_ID_FIELDS = ['Job', 'Milestone', 'Block', 'Stage'];
-    var TRACKER_FIELDS = ['Job', 'Milestone', 'Block', 'Stage', 'Dft_release', 'User', 'Status', 'Comments', 'Promote'];
+const APR_WATCHLIST_POPUP_NAME = 'apr-watchlist-manager';
+const APR_WATCHLIST_POPUP_FEATURES = 'popup=yes,width=1180,height=820,resizable=yes,scrollbars=yes';
+const APR_WATCHLIST_TRACKER_FIELDS = [
+  'Job',
+  'Milestone',
+  'Block',
+  'Stage',
+  'Dft_release',
+  'User',
+  'Status',
+  'Comments',
+  'Promote',
+];
 
-    var popupWindow = null;
-    var popupState = {
-        activeRow: null,
-        userId: '',
-        views: [],
-        selectedViewKey: 'current',
-        currentWeekInfo: null,
-        isLoading: false,
-        statusMessage: '',
-        statusIsError: false
-    };
+const aprWatchlistPopupState = {
+  popupWindow: null,
+  userId: '',
+  defaultWatchlist: 'APR Weekly',
+  activeRow: null,
+  selectedWatchlistName: '',
+  watchlists: [],
+  draftWatchlistName: '',
+  isLoading: false,
+  statusMessage: '',
+  statusIsError: false,
+};
 
-    function escapeHtml(value) {
-        return String(value == null ? '' : value)
-            .replace(/&/g, '&amp;')
-            .replace(/"/g, '&quot;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
+function buildAprWatchlistPopupShell(doc) {
+  doc.open();
+  doc.write(
+    '<!DOCTYPE html>' +
+    '<html lang="en">' +
+    '<head>' +
+    '<meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+    '<title>APR Watchlist Manager</title>' +
+    '<style>' +
+    ':root { color-scheme: light; }' +
+    '* { box-sizing: border-box; }' +
+    'body { margin: 0; font-family: Arial, sans-serif; background: #f5f7fa; color: #1b1c1d; }' +
+    '.popup-shell { padding: 18px; }' +
+    '.popup-card { background: #ffffff; border: 1px solid rgba(20, 33, 50, 0.08); border-radius: 16px; box-shadow: 0 16px 36px rgba(30, 54, 80, 0.08); padding: 16px; }' +
+    '.popup-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }' +
+    '.popup-title { margin: 0; font-size: 24px; font-weight: 700; }' +
+    '.popup-subtitle { margin: 6px 0 0; color: rgba(20, 33, 50, 0.7); font-size: 13px; line-height: 1.5; }' +
+    '.popup-toolbar { display: flex; flex-wrap: wrap; gap: 8px; }' +
+    '.popup-layout { display: grid; grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); gap: 16px; }' +
+    '.popup-stack { display: grid; gap: 16px; }' +
+    '.popup-section { border: 1px solid rgba(20, 33, 50, 0.08); background: #ffffff; border-radius: 14px; padding: 14px; }' +
+    '.popup-section-title { margin: 0 0 12px; font-size: 16px; font-weight: 700; }' +
+    '.popup-status { min-height: 20px; margin-bottom: 12px; font-size: 13px; color: #315f2b; }' +
+    '.popup-status.error { color: #b42318; }' +
+    '.popup-button { border: 0; border-radius: 10px; padding: 9px 14px; font-size: 13px; font-weight: 700; cursor: pointer; background: #1f6feb; color: #ffffff; }' +
+    '.popup-button.secondary { background: #eef2f7; color: #1b1c1d; }' +
+    '.popup-button.danger { background: #d92d20; }' +
+    '.popup-button:disabled { opacity: 0.55; cursor: not-allowed; }' +
+    '.popup-label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 700; color: #4c6280; text-transform: uppercase; letter-spacing: 0.05em; }' +
+    '.popup-inline-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }' +
+    '.popup-input { width: 100%; min-height: 40px; border: 1px solid rgba(20, 33, 50, 0.14); border-radius: 10px; padding: 8px 10px; font-size: 14px; background: #ffffff; color: #1b1c1d; }' +
+    '.popup-summary-grid { display: grid; gap: 8px; }' +
+    '.popup-summary-item { border: 1px solid rgba(20, 33, 50, 0.08); background: #f9fbfd; border-radius: 12px; padding: 10px 12px; }' +
+    '.popup-summary-key { display: block; margin-bottom: 4px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: rgba(20, 33, 50, 0.58); }' +
+    '.popup-summary-value { font-size: 13px; font-weight: 700; word-break: break-word; }' +
+    '.popup-watchlists { display: grid; gap: 8px; }' +
+    '.popup-watchlist-button { width: 100%; border: 1px solid rgba(20, 33, 50, 0.08); border-radius: 12px; background: #f9fbfd; padding: 11px 12px; text-align: left; cursor: pointer; transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease; }' +
+    '.popup-watchlist-button:hover { transform: translateY(-1px); border-color: rgba(15, 108, 189, 0.35); }' +
+    '.popup-watchlist-button.active { background: #eef5fd; border-color: #9fc3ea; box-shadow: 0 12px 24px rgba(15, 108, 189, 0.12); }' +
+    '.popup-watchlist-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 700; }' +
+    '.popup-watchlist-meta { display: block; margin-top: 6px; font-size: 12px; color: rgba(20, 33, 50, 0.72); }' +
+    '.popup-badge, .popup-chip { display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; font-weight: 700; }' +
+    '.popup-badge { min-width: 1.65rem; padding: 0.2rem 0.5rem; background: rgba(15, 108, 189, 0.12); color: #18548d; font-size: 0.75rem; }' +
+    '.popup-chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }' +
+    '.popup-chip { padding: 0.38rem 0.74rem; background: #ecf3fb; color: #214d80; font-size: 0.78rem; }' +
+    '.popup-copy { margin: 0; color: rgba(20, 33, 50, 0.7); font-size: 13px; line-height: 1.5; }' +
+    '.popup-table-wrap { overflow: auto; border: 1px solid rgba(20, 33, 50, 0.08); border-radius: 12px; background: #ffffff; }' +
+    '.popup-table { width: 100%; border-collapse: collapse; font-size: 13px; }' +
+    '.popup-table th, .popup-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid rgba(20, 33, 50, 0.08); vertical-align: middle; }' +
+    '.popup-table th { background: #eef2f7; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: #4c6280; position: sticky; top: 0; }' +
+    '.popup-table tr:last-child td { border-bottom: 0; }' +
+    '.popup-empty { padding: 24px 16px; text-align: center; color: rgba(20, 33, 50, 0.66); font-size: 13px; }' +
+    '.popup-status-pill, .popup-promote-pill { display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; padding: 0.35rem 0.68rem; font-size: 0.78rem; font-weight: 700; background: #eef2f7; color: #44566d; }' +
+    '.is-positive { background: #e9f8ec; color: #1f5e31; }' +
+    '.is-negative { background: #fde8e7; color: #9b2c2c; }' +
+    '.is-warning { background: #fff4dc; color: #8a5a00; }' +
+    '.is-info { background: #e7f1fb; color: #1f4f8c; }' +
+    '@media (max-width: 920px) { .popup-layout { grid-template-columns: 1fr; } .popup-shell { padding: 12px; } }' +
+    '</style>' +
+    '</head>' +
+    '<body>' +
+    '<div id="apr-watchlist-root" class="popup-shell"></div>' +
+    '</body>' +
+    '</html>'
+  );
+  doc.close();
+}
+
+function ensureAprWatchlistPopupWindow() {
+  if (aprWatchlistPopupState.popupWindow && !aprWatchlistPopupState.popupWindow.closed) {
+    if (!aprWatchlistPopupState.popupWindow.document.getElementById('apr-watchlist-root')) {
+      buildAprWatchlistPopupShell(aprWatchlistPopupState.popupWindow.document);
     }
-
-    function safeJsonParse(value, fallback) {
-        if (!value) {
-            return fallback;
-        }
-
-        try {
-            return JSON.parse(value);
-        } catch (error) {
-            return fallback;
-        }
-    }
-
-    function nowIso() {
-        return new Date().toISOString();
-    }
-
-    function padNumber(value) {
-        return String(value).padStart(2, '0');
-    }
-
-    function getWeekInfo(dateInput) {
-        var date = dateInput ? new Date(dateInput) : new Date();
-        if (Number.isNaN(date.getTime())) {
-            date = new Date();
-        }
-
-        date.setHours(0, 0, 0, 0);
-
-        var isoDate = new Date(date);
-        isoDate.setDate(isoDate.getDate() + 3 - ((isoDate.getDay() + 6) % 7));
-
-        var isoYear = isoDate.getFullYear();
-        var weekOne = new Date(isoYear, 0, 4);
-        weekOne.setHours(0, 0, 0, 0);
-        weekOne.setDate(weekOne.getDate() + 3 - ((weekOne.getDay() + 6) % 7));
-
-        var isoWeek = 1 + Math.round((isoDate - weekOne) / 604800000);
-
-        var weekStart = new Date(date);
-        weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
-        weekStart.setHours(0, 0, 0, 0);
-
-        var weekEnd = new Date(weekStart);
-        weekEnd.setDate(weekEnd.getDate() + 6);
-        weekEnd.setHours(23, 59, 59, 999);
-
-        return {
-            key: isoYear + '-W' + padNumber(isoWeek),
-            label: 'Week of ' + weekStart.toLocaleDateString(undefined, {
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric'
-            }),
-            start: weekStart.toISOString(),
-            end: weekEnd.toISOString()
-        };
-    }
-
-    function metadataPayloadForWeek(weekInfo) {
-        return JSON.stringify({
-            week_key: weekInfo.key,
-            week_label: weekInfo.label,
-            week_start: weekInfo.start,
-            week_end: weekInfo.end
-        });
-    }
-
-    function getWeekInfoFromMetadataRow(row) {
-        if (!row) {
-            return null;
-        }
-
-        var payload = safeJsonParse(row.run_payload, {});
-        if (payload.week_key) {
-            return {
-                key: String(payload.week_key),
-                label: String(payload.week_label || ('Week ' + payload.week_key)),
-                start: String(payload.week_start || ''),
-                end: String(payload.week_end || '')
-            };
-        }
-
-        return getWeekInfo(row.updated_at || row.created_at || new Date());
-    }
-
-    function getRowLabel(row) {
-        if (typeof window.getAPRTrackerRowLabel === 'function') {
-            return window.getAPRTrackerRowLabel(row || {});
-        }
-
-        return [row.Job, row.Milestone, row.Block, row.Stage]
-            .filter(function (value) {
-                return value;
-            })
-            .join(' / ');
-    }
-
-    function buildPopupShell(doc) {
-        doc.open();
-        doc.write(
-            '<!DOCTYPE html>' +
-            '<html lang="en">' +
-            '<head>' +
-            '<meta charset="utf-8">' +
-            '<meta name="viewport" content="width=device-width, initial-scale=1">' +
-            '<title>APR Watchlist</title>' +
-            '<style>' +
-            ':root { color-scheme: light; }' +
-            '* { box-sizing: border-box; }' +
-            'body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; background: #f6f8fb; color: #14213d; }' +
-            '.apr-watchlist-shell { padding: 18px; }' +
-            '.apr-watchlist-card { background: #ffffff; border: 1px solid #d7deea; border-radius: 12px; box-shadow: 0 10px 28px rgba(20, 33, 61, 0.08); padding: 16px; }' +
-            '.apr-watchlist-header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 16px; }' +
-            '.apr-watchlist-title { margin: 0; font-size: 22px; font-weight: 700; }' +
-            '.apr-watchlist-subtitle { margin: 4px 0 0; color: #50627d; font-size: 13px; }' +
-            '.apr-watchlist-toolbar { display: flex; flex-wrap: wrap; gap: 8px; }' +
-            '.apr-watchlist-button { border: 0; border-radius: 8px; padding: 9px 14px; font-size: 13px; font-weight: 600; cursor: pointer; background: #0f6cbd; color: #ffffff; }' +
-            '.apr-watchlist-button.secondary { background: #e8eef7; color: #14213d; }' +
-            '.apr-watchlist-button.danger { background: #c0392b; }' +
-            '.apr-watchlist-button:disabled { opacity: 0.55; cursor: not-allowed; }' +
-            '.apr-watchlist-grid { display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); gap: 16px; }' +
-            '.apr-watchlist-stack { display: grid; gap: 16px; }' +
-            '.apr-watchlist-panel-title { margin: 0 0 12px; font-size: 15px; font-weight: 700; }' +
-            '.apr-watchlist-run { display: grid; gap: 8px; font-size: 13px; }' +
-            '.apr-watchlist-run strong { display: block; font-size: 16px; }' +
-            '.apr-watchlist-meta { display: grid; gap: 6px; color: #415168; }' +
-            '.apr-watchlist-meta span { display: block; }' +
-            '.apr-watchlist-controls { display: grid; gap: 10px; }' +
-            '.apr-watchlist-select { width: 100%; min-height: 38px; border: 1px solid #c4cfdf; border-radius: 8px; padding: 8px 10px; font-size: 14px; background: #ffffff; color: #14213d; }' +
-            '.apr-watchlist-note { margin: 0; color: #5d6f88; font-size: 12px; line-height: 1.5; }' +
-            '.apr-watchlist-status { min-height: 20px; margin-bottom: 12px; font-size: 13px; color: #315f2b; }' +
-            '.apr-watchlist-status.error { color: #b42318; }' +
-            '.apr-watchlist-table-wrap { overflow: auto; border: 1px solid #d7deea; border-radius: 10px; background: #fbfcfe; }' +
-            '.apr-watchlist-table { width: 100%; border-collapse: collapse; font-size: 13px; }' +
-            '.apr-watchlist-table th, .apr-watchlist-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #e2e8f0; vertical-align: top; }' +
-            '.apr-watchlist-table th { background: #eef3f9; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: #5d6f88; position: sticky; top: 0; }' +
-            '.apr-watchlist-table tr:last-child td { border-bottom: 0; }' +
-            '.apr-watchlist-empty { padding: 26px 18px; text-align: center; color: #5d6f88; font-size: 13px; }' +
-            '.apr-watchlist-pill-row { display: flex; flex-wrap: wrap; gap: 8px; }' +
-            '.apr-watchlist-pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 9px; font-size: 11px; font-weight: 700; background: #e8eef7; color: #31445f; }' +
-            '.apr-watchlist-pill.current { background: #d8f0dc; color: #215732; }' +
-            '.apr-watchlist-pill.archive { background: #f3e8cf; color: #78591c; }' +
-            '@media (max-width: 860px) { .apr-watchlist-grid { grid-template-columns: 1fr; } .apr-watchlist-shell { padding: 12px; } }' +
-            '</style>' +
-            '</head>' +
-            '<body>' +
-            '<div id="apr-watchlist-root" class="apr-watchlist-shell"></div>' +
-            '</body>' +
-            '</html>'
-        );
-        doc.close();
-    }
-
-    function ensurePopupWindow() {
-        if (popupWindow && !popupWindow.closed) {
-            if (!popupWindow.document.getElementById('apr-watchlist-root')) {
-                buildPopupShell(popupWindow.document);
-            }
-            return popupWindow;
-        }
-
-        popupWindow = window.open(
-            '',
-            'apr-watchlist',
-            'popup=yes,width=1120,height=760,resizable=yes,scrollbars=yes'
-        );
-
-        if (!popupWindow) {
-            alert('Unable to open the watchlist window. Please allow pop-ups for this site.');
-            return null;
-        }
-
-        buildPopupShell(popupWindow.document);
-        return popupWindow;
-    }
-
-    function parseResponsePayload(response, text) {
-        if (!text) {
-            return {};
-        }
-
-        try {
-            return JSON.parse(text);
-        } catch (error) {
-            return {
-                success: response.ok,
-                raw_text: text
-            };
-        }
-    }
-
-    function requestJson(url, method, body) {
-        var options = {
-            method: method,
-            credentials: 'same-origin',
-            headers: {
-                Accept: 'application/json'
-            }
-        };
-
-        if (body !== undefined) {
-            options.headers['Content-Type'] = 'application/json';
-            options.body = JSON.stringify(body);
-        }
-
-        return fetch(url, options).then(function (response) {
-            return response.text().then(function (text) {
-                var payload = parseResponsePayload(response, text);
-
-                if (!response.ok || payload.success === false) {
-                    var message = payload.error || payload.message || payload.raw_text || ('Request failed (' + response.status + ')');
-                    throw new Error(message);
-                }
-
-                return payload;
-            });
-        });
-    }
-
-    function requestTableApi(path, body) {
-        return requestJson(path, 'POST', body);
-    }
-
-    function runSeries(tasks) {
-        return tasks.reduce(function (promise, task) {
-            return promise.then(task);
-        }, Promise.resolve());
-    }
-
-    function findView(viewKey) {
-        for (var i = 0; i < popupState.views.length; i += 1) {
-            if (popupState.views[i].key === viewKey) {
-                return popupState.views[i];
-            }
-        }
-
-        return null;
-    }
-
-    function syncSelectedView() {
-        if (!popupState.views.length) {
-            popupState.selectedViewKey = 'current';
-            return;
-        }
-
-        if (findView(popupState.selectedViewKey)) {
-            return;
-        }
-
-        popupState.selectedViewKey = popupState.views[0].key;
-    }
-
-    function setStatus(message, isError) {
-        popupState.statusMessage = message || '';
-        popupState.statusIsError = Boolean(isError);
-        renderPopup();
-    }
-
-    function normalizeRun(run) {
-        if (!run || typeof run !== 'object') {
-            throw new Error('Select a tracker row first.');
-        }
-
-        var normalized = {};
-
-        TRACKER_FIELDS.forEach(function (fieldName) {
-            var value = run[fieldName];
-            normalized[fieldName] = value == null ? '' : String(value).trim();
-        });
-
-        var missingFields = RUN_ID_FIELDS.filter(function (fieldName) {
-            return !normalized[fieldName];
-        });
-
-        if (missingFields.length) {
-            throw new Error('Run must include Job, Milestone, Block, and Stage.');
-        }
-
-        normalized.run_key = RUN_ID_FIELDS.map(function (fieldName) {
-            return normalized[fieldName];
-        }).join('||');
-
-        return normalized;
-    }
-
-    function ensurePopupStateUser() {
-        if (popupState.userId) {
-            return Promise.resolve(popupState.userId);
-        }
-
-        return requestJson('/api/session', 'GET').then(function (payload) {
-            var userId = String(payload.user_id || '').trim().toLowerCase();
-            if (!userId) {
-                throw new Error('user_id missing from session');
-            }
-
-            popupState.userId = userId;
-            return userId;
-        });
-    }
-
-    function ensureWatchlistTable() {
-        return requestTableApi('/api/create-table', {
-            db_location: DB_LOCATION,
-            table_name: WATCHLIST_TABLE,
-            columns: {
-                id: 'INTEGER PRIMARY KEY AUTOINCREMENT',
-                record_type: 'TEXT NOT NULL',
-                user_id: 'TEXT NOT NULL',
-                watchlist_name: 'TEXT NOT NULL',
-                is_default: 'INTEGER NOT NULL DEFAULT 0',
-                run_key: 'TEXT NOT NULL DEFAULT \'\'',
-                job: 'TEXT',
-                milestone: 'TEXT',
-                block: 'TEXT',
-                stage: 'TEXT',
-                tracker_user: 'TEXT',
-                dft_release: 'TEXT',
-                run_status: 'TEXT',
-                comments: 'TEXT',
-                promote: 'TEXT',
-                run_payload: 'TEXT NOT NULL DEFAULT \'{}\'',
-                created_at: 'TEXT NOT NULL',
-                updated_at: 'TEXT NOT NULL'
-            }
-        });
-    }
-
-    function ensureWeeklyArchiveTable() {
-        return requestTableApi('/api/create-table', {
-            db_location: DB_LOCATION,
-            table_name: WEEKLY_TABLE,
-            columns: {
-                id: 'INTEGER PRIMARY KEY AUTOINCREMENT',
-                user_id: 'TEXT NOT NULL',
-                week_key: 'TEXT NOT NULL',
-                week_label: 'TEXT NOT NULL',
-                week_start: 'TEXT NOT NULL',
-                week_end: 'TEXT NOT NULL',
-                source_watchlist: 'TEXT NOT NULL',
-                run_key: 'TEXT NOT NULL',
-                job: 'TEXT',
-                milestone: 'TEXT',
-                block: 'TEXT',
-                stage: 'TEXT',
-                tracker_user: 'TEXT',
-                dft_release: 'TEXT',
-                run_status: 'TEXT',
-                comments: 'TEXT',
-                promote: 'TEXT',
-                run_payload: 'TEXT NOT NULL DEFAULT \'{}\'',
-                archived_at: 'TEXT NOT NULL'
-            }
-        });
-    }
-
-    function fetchCurrentMetadataRow(userId) {
-        return requestTableApi('/api/query-table', {
-            db_location: DB_LOCATION,
-            query: 'SELECT * FROM "apr_watchlist" WHERE "user_id" = ? AND "record_type" = ? AND lower("watchlist_name") = lower(?) ORDER BY "id" ASC LIMIT 1',
-            params: [userId, WATCHLIST_RECORD, DEFAULT_WATCHLIST]
-        }).then(function (payload) {
-            return payload.rows && payload.rows.length ? payload.rows[0] : null;
-        });
-    }
-
-    function fetchCurrentRunRows(userId) {
-        return requestTableApi('/api/query-table', {
-            db_location: DB_LOCATION,
-            query: 'SELECT * FROM "apr_watchlist" WHERE "user_id" = ? AND "record_type" = ? AND lower("watchlist_name") = lower(?) ORDER BY lower("block") ASC, lower("job") ASC, lower("stage") ASC',
-            params: [userId, RUN_RECORD, DEFAULT_WATCHLIST]
-        }).then(function (payload) {
-            return Array.isArray(payload.rows) ? payload.rows : [];
-        });
-    }
-
-    function fetchArchivedRows(userId) {
-        return requestTableApi('/api/query-table', {
-            db_location: DB_LOCATION,
-            query: 'SELECT * FROM "apr_weekly" WHERE "user_id" = ? AND lower("source_watchlist") = lower(?) ORDER BY "week_start" DESC, lower("block") ASC, lower("job") ASC, lower("stage") ASC',
-            params: [userId, DEFAULT_WATCHLIST]
-        }).then(function (payload) {
-            return Array.isArray(payload.rows) ? payload.rows : [];
-        });
-    }
-
-    function insertCurrentMetadataRow(userId, weekInfo) {
-        var timestamp = nowIso();
-
-        return requestTableApi('/api/insert-record', {
-            db_location: DB_LOCATION,
-            table_name: WATCHLIST_TABLE,
-            record: {
-                record_type: WATCHLIST_RECORD,
-                user_id: userId,
-                watchlist_name: DEFAULT_WATCHLIST,
-                is_default: 1,
-                run_key: '',
-                run_payload: metadataPayloadForWeek(weekInfo),
-                created_at: timestamp,
-                updated_at: timestamp
-            }
-        }).then(function () {
-            return fetchCurrentMetadataRow(userId);
-        });
-    }
-
-    function updateCurrentMetadataRow(userId, metadataId, weekInfo) {
-        return requestTableApi('/api/update-record', {
-            db_location: DB_LOCATION,
-            table_name: WATCHLIST_TABLE,
-            updates: {
-                watchlist_name: DEFAULT_WATCHLIST,
-                is_default: 1,
-                run_payload: metadataPayloadForWeek(weekInfo),
-                updated_at: nowIso()
-            },
-            criteria: {
-                id: metadataId,
-                user_id: userId,
-                record_type: WATCHLIST_RECORD
-            }
-        });
-    }
-
-    function ensureCurrentWeekMetadata(userId, currentWeekInfo) {
-        return fetchCurrentMetadataRow(userId).then(function (metadataRow) {
-            if (metadataRow) {
-                return metadataRow;
-            }
-
-            return insertCurrentMetadataRow(userId, currentWeekInfo);
-        });
-    }
-
-    function archivePreviousWeek(userId, previousWeekInfo, runRows) {
-        if (!previousWeekInfo || !previousWeekInfo.key || !runRows.length) {
-            return Promise.resolve();
-        }
-
-        return requestTableApi('/api/query-table', {
-            db_location: DB_LOCATION,
-            query: 'DELETE FROM "apr_weekly" WHERE "user_id" = ? AND "week_key" = ? AND lower("source_watchlist") = lower(?)',
-            params: [userId, previousWeekInfo.key, DEFAULT_WATCHLIST]
-        }).then(function () {
-            var archivedAt = nowIso();
-
-            return runSeries(runRows.map(function (row) {
-                return function () {
-                    return requestTableApi('/api/insert-record', {
-                        db_location: DB_LOCATION,
-                        table_name: WEEKLY_TABLE,
-                        record: {
-                            user_id: userId,
-                            week_key: previousWeekInfo.key,
-                            week_label: previousWeekInfo.label,
-                            week_start: previousWeekInfo.start || '',
-                            week_end: previousWeekInfo.end || '',
-                            source_watchlist: DEFAULT_WATCHLIST,
-                            run_key: row.run_key || '',
-                            job: row.job || '',
-                            milestone: row.milestone || '',
-                            block: row.block || '',
-                            stage: row.stage || '',
-                            tracker_user: row.tracker_user || '',
-                            dft_release: row.dft_release || '',
-                            run_status: row.run_status || '',
-                            comments: row.comments || '',
-                            promote: row.promote || '',
-                            run_payload: row.run_payload || '{}',
-                            archived_at: archivedAt
-                        }
-                    });
-                };
-            }));
-        });
-    }
-
-    function clearCurrentWeekRuns(userId) {
-        return requestTableApi('/api/query-table', {
-            db_location: DB_LOCATION,
-            query: 'DELETE FROM "apr_watchlist" WHERE "user_id" = ? AND "record_type" = ? AND lower("watchlist_name") = lower(?)',
-            params: [userId, RUN_RECORD, DEFAULT_WATCHLIST]
-        });
-    }
-
-    function rolloverWeekIfNeeded(userId, metadataRow, currentRunRows, currentWeekInfo) {
-        var storedWeekInfo = getWeekInfoFromMetadataRow(metadataRow);
-        var hasWeekChanged = storedWeekInfo && storedWeekInfo.key !== currentWeekInfo.key;
-        var metadataNeedsRefresh = !storedWeekInfo || storedWeekInfo.key !== currentWeekInfo.key || storedWeekInfo.label !== currentWeekInfo.label;
-
-        if (!metadataRow) {
-            return Promise.resolve();
-        }
-
-        if (!hasWeekChanged && !metadataNeedsRefresh) {
-            return Promise.resolve();
-        }
-
-        if (!hasWeekChanged) {
-            return updateCurrentMetadataRow(userId, metadataRow.id, currentWeekInfo);
-        }
-
-        return archivePreviousWeek(userId, storedWeekInfo, currentRunRows)
-            .then(function () {
-                return clearCurrentWeekRuns(userId);
-            })
-            .then(function () {
-                return updateCurrentMetadataRow(userId, metadataRow.id, currentWeekInfo);
-            });
-    }
-
-    function buildViews(metadataRow, currentRunRows, archivedRows) {
-        var currentWeekInfo = getWeekInfoFromMetadataRow(metadataRow) || popupState.currentWeekInfo || getWeekInfo(new Date());
-        popupState.currentWeekInfo = currentWeekInfo;
-
-        var currentView = {
-            key: 'current',
-            title: DEFAULT_WATCHLIST,
-            selectLabel: DEFAULT_WATCHLIST + ' (' + currentWeekInfo.label + ')',
-            weekLabel: currentWeekInfo.label,
-            type: 'current',
-            isEditable: true,
-            maxItems: CURRENT_WEEK_LIMIT,
-            items: currentRunRows.map(function (row) {
-                return {
-                    id: row.id,
-                    run_key: row.run_key || '',
-                    Job: row.job || '',
-                    Milestone: row.milestone || '',
-                    Block: row.block || '',
-                    Stage: row.stage || '',
-                    Dft_release: row.dft_release || '',
-                    User: row.tracker_user || '',
-                    Status: row.run_status || '',
-                    Comments: row.comments || '',
-                    Promote: row.promote || '',
-                    payload: safeJsonParse(row.run_payload, {})
-                };
-            })
-        };
-
-        var archiveMap = {};
-
-        archivedRows.forEach(function (row) {
-            var weekKey = row.week_key || 'unknown';
-            if (!archiveMap[weekKey]) {
-                archiveMap[weekKey] = {
-                    key: 'archive:' + weekKey,
-                    title: DEFAULT_WATCHLIST + ' Archive',
-                    selectLabel: (row.week_label || weekKey) + ' (Archived)',
-                    weekLabel: row.week_label || weekKey,
-                    type: 'archive',
-                    isEditable: false,
-                    maxItems: 0,
-                    sortStart: row.week_start || '',
-                    items: []
-                };
-            }
-
-            archiveMap[weekKey].items.push({
-                id: row.id,
-                run_key: row.run_key || '',
-                Job: row.job || '',
-                Milestone: row.milestone || '',
-                Block: row.block || '',
-                Stage: row.stage || '',
-                Dft_release: row.dft_release || '',
-                User: row.tracker_user || '',
-                Status: row.run_status || '',
-                Comments: row.comments || '',
-                Promote: row.promote || '',
-                payload: safeJsonParse(row.run_payload, {})
-            });
-        });
-
-        var archiveViews = Object.keys(archiveMap)
-            .map(function (weekKey) {
-                return archiveMap[weekKey];
-            })
-            .sort(function (left, right) {
-                return String(right.sortStart || '').localeCompare(String(left.sortStart || ''));
-            });
-
-        popupState.views = [currentView].concat(archiveViews);
-        syncSelectedView();
-    }
-
-    function loadViews(message) {
-        popupState.isLoading = true;
-        popupState.currentWeekInfo = getWeekInfo(new Date());
-
-        if (message) {
-            popupState.statusMessage = message;
-            popupState.statusIsError = false;
-        }
-
-        renderPopup();
-
-        return ensurePopupStateUser()
-            .then(function (userId) {
-                return ensureWatchlistTable()
-                    .then(function () {
-                        return ensureWeeklyArchiveTable();
-                    })
-                    .then(function () {
-                        return ensureCurrentWeekMetadata(userId, popupState.currentWeekInfo);
-                    })
-                    .then(function (metadataRow) {
-                        return fetchCurrentRunRows(userId).then(function (currentRunRows) {
-                            return rolloverWeekIfNeeded(userId, metadataRow, currentRunRows, popupState.currentWeekInfo)
-                                .then(function () {
-                                    return Promise.all([
-                                        fetchCurrentMetadataRow(userId),
-                                        fetchCurrentRunRows(userId),
-                                        fetchArchivedRows(userId)
-                                    ]);
-                                });
-                        });
-                    });
-            })
-            .then(function (results) {
-                buildViews(results[0], results[1], results[2]);
-                popupState.isLoading = false;
-                popupState.statusMessage = message || '';
-                popupState.statusIsError = false;
-                renderPopup();
-                return results;
-            })
-            .catch(function (error) {
-                popupState.isLoading = false;
-                popupState.statusMessage = error.message;
-                popupState.statusIsError = true;
-                renderPopup();
-                throw error;
-            });
-    }
-
-    function touchCurrentMetadata() {
-        return ensurePopupStateUser()
-            .then(function (userId) {
-                return fetchCurrentMetadataRow(userId).then(function (metadataRow) {
-                    if (!metadataRow) {
-                        return insertCurrentMetadataRow(userId, popupState.currentWeekInfo || getWeekInfo(new Date()));
-                    }
-
-                    return updateCurrentMetadataRow(userId, metadataRow.id, popupState.currentWeekInfo || getWeekInfo(new Date()));
-                });
-            });
-    }
-
-    function addSelectedRun() {
-        var normalizedRun;
-        var selectedView = findView(popupState.selectedViewKey);
-
-        try {
-            normalizedRun = normalizeRun(popupState.activeRow);
-        } catch (error) {
-            setStatus(error.message, true);
-            return;
-        }
-
-        if (!selectedView || !selectedView.isEditable) {
-            setStatus('Switch back to the current APR Weekly view to edit runs.', true);
-            return;
-        }
-
-        if (selectedView.items.length >= CURRENT_WEEK_LIMIT) {
-            setStatus('APR Weekly can only hold 3 runs for the current week.', true);
-            return;
-        }
-
-        var duplicate = selectedView.items.some(function (item) {
-            return item.run_key === normalizedRun.run_key;
-        });
-        if (duplicate) {
-            setStatus('Run already exists in APR Weekly.', true);
-            return;
-        }
-
-        popupState.isLoading = true;
-        setStatus('Adding selected run...', false);
-
-        ensurePopupStateUser()
-            .then(function (userId) {
-                var timestamp = nowIso();
-
-                return requestTableApi('/api/insert-record', {
-                    db_location: DB_LOCATION,
-                    table_name: WATCHLIST_TABLE,
-                    record: {
-                        record_type: RUN_RECORD,
-                        user_id: userId,
-                        watchlist_name: DEFAULT_WATCHLIST,
-                        is_default: 1,
-                        run_key: normalizedRun.run_key,
-                        job: normalizedRun.Job,
-                        milestone: normalizedRun.Milestone,
-                        block: normalizedRun.Block,
-                        stage: normalizedRun.Stage,
-                        tracker_user: normalizedRun.User,
-                        dft_release: normalizedRun.Dft_release,
-                        run_status: normalizedRun.Status,
-                        comments: normalizedRun.Comments,
-                        promote: normalizedRun.Promote,
-                        run_payload: JSON.stringify(popupState.activeRow || {}),
-                        created_at: timestamp,
-                        updated_at: timestamp
-                    }
-                });
-            })
-            .then(function () {
-                return touchCurrentMetadata();
-            })
-            .then(function () {
-                return loadViews('Run added to APR Weekly.');
-            })
-            .catch(function (error) {
-                popupState.isLoading = false;
-                setStatus(error.message, true);
-            });
-    }
-
-    function removeRun(itemId) {
-        var popup = ensurePopupWindow();
-        var selectedView = findView(popupState.selectedViewKey);
-
-        if (!popup || !selectedView || !selectedView.isEditable) {
-            setStatus('Archived weekly snapshots are read-only.', true);
-            return;
-        }
-
-        if (!popup.confirm('Remove this run from APR Weekly?')) {
-            return;
-        }
-
-        popupState.isLoading = true;
-        setStatus('Removing run...', false);
-
-        ensurePopupStateUser()
-            .then(function (userId) {
-                return requestTableApi('/api/delete-record', {
-                    db_location: DB_LOCATION,
-                    table_name: WATCHLIST_TABLE,
-                    criteria: {
-                        id: itemId,
-                        user_id: userId,
-                        record_type: RUN_RECORD
-                    }
-                });
-            })
-            .then(function () {
-                return touchCurrentMetadata();
-            })
-            .then(function () {
-                return loadViews('Run removed from APR Weekly.');
-            })
-            .catch(function (error) {
-                popupState.isLoading = false;
-                setStatus(error.message, true);
-            });
-    }
-
-    function renderRunsTable(view) {
-        var items = view ? view.items || [] : [];
-
-        if (!items.length) {
-            return '<div class="apr-watchlist-empty">No runs saved for this weekly view yet.</div>';
-        }
-
-        var rowsHtml = '';
-
-        items.forEach(function (item, index) {
-            rowsHtml +=
-                '<tr>' +
-                '<td>' + escapeHtml(item.Block) + '</td>' +
-                '<td>' +
-                '<strong>' + escapeHtml(item.Job) + '</strong><br>' +
-                '<span>' + escapeHtml(item.Milestone) + '</span>' +
-                '</td>' +
-                '<td>' + escapeHtml(item.Stage) + '</td>' +
-                '<td>' + escapeHtml(item.Status) + '</td>' +
-                '<td>' + escapeHtml(item.User) + '</td>' +
-                '<td>' +
-                (view.isEditable
-                    ? '<button type="button" class="apr-watchlist-button danger apr-remove-run" data-item-index="' + escapeHtml(index) + '">Remove</button>'
-                    : '<span class="apr-watchlist-pill archive">Archived</span>') +
-                '</td>' +
-                '</tr>';
-        });
-
-        return (
-            '<div class="apr-watchlist-table-wrap">' +
-            '<table class="apr-watchlist-table">' +
-            '<thead>' +
-            '<tr>' +
-            '<th>Block</th>' +
-            '<th>Run</th>' +
-            '<th>Stage</th>' +
-            '<th>Status</th>' +
-            '<th>User</th>' +
-            '<th></th>' +
-            '</tr>' +
-            '</thead>' +
-            '<tbody>' + rowsHtml + '</tbody>' +
-            '</table>' +
-            '</div>'
-        );
-    }
-
-    function renderPopup() {
-        var popup = ensurePopupWindow();
-        if (!popup) return;
-
-        var doc = popup.document;
-        if (!doc.getElementById('apr-watchlist-root')) {
-            buildPopupShell(doc);
-        }
-
-        var root = doc.getElementById('apr-watchlist-root');
-        if (!root) return;
-
-        var selectedView = findView(popupState.selectedViewKey);
-        var viewOptionsHtml = '';
-
-        popupState.views.forEach(function (view) {
-            var isSelected = view.key === popupState.selectedViewKey ? ' selected' : '';
-            viewOptionsHtml += '<option value="' + escapeHtml(view.key) + '"' + isSelected + '>' + escapeHtml(view.selectLabel) + '</option>';
-        });
-
-        var statusClass = popupState.statusIsError ? 'apr-watchlist-status error' : 'apr-watchlist-status';
-        var rowLabel = popupState.activeRow ? getRowLabel(popupState.activeRow) : 'No APR run selected yet.';
-        var isEditableView = selectedView ? selectedView.isEditable : false;
-        var addDisabled = popupState.isLoading || !popupState.activeRow || !isEditableView;
-        var currentCountText = selectedView && selectedView.isEditable ? (selectedView.items.length + ' / ' + CURRENT_WEEK_LIMIT + ' runs used') : 'Read-only snapshot';
-
-        root.innerHTML =
-            '<div class="apr-watchlist-card">' +
-            '<div class="apr-watchlist-header">' +
-            '<div>' +
-            '<h1 class="apr-watchlist-title">APR Weekly</h1>' +
-            '<p class="apr-watchlist-subtitle">Current week stays editable in <code>apr_watchlist</code>. When a new week is detected, the prior week is copied into <code>apr_weekly</code> and the current list is reset.</p>' +
-            '</div>' +
-            '<div class="apr-watchlist-toolbar">' +
-            '<button type="button" class="apr-watchlist-button secondary" id="apr-watchlist-refresh"' + (popupState.isLoading ? ' disabled' : '') + '>Refresh</button>' +
-            '<button type="button" class="apr-watchlist-button" id="apr-watchlist-add"' + (addDisabled ? ' disabled' : '') + '>Add Selected Run</button>' +
-            '</div>' +
-            '</div>' +
-            '<div class="' + statusClass + '">' + escapeHtml(popupState.statusMessage || (popupState.isLoading ? 'Loading weekly watchlists...' : '')) + '</div>' +
-            '<div class="apr-watchlist-grid">' +
-            '<div class="apr-watchlist-stack">' +
-            '<section class="apr-watchlist-card">' +
-            '<h2 class="apr-watchlist-panel-title">Selected APR Run</h2>' +
-            '<div class="apr-watchlist-run">' +
-            '<strong>' + escapeHtml(rowLabel) + '</strong>' +
-            '<div class="apr-watchlist-meta">' +
-            '<span><b>Status:</b> ' + escapeHtml((popupState.activeRow || {}).Status || '-') + '</span>' +
-            '<span><b>User:</b> ' + escapeHtml((popupState.activeRow || {}).User || '-') + '</span>' +
-            '<span><b>Release:</b> ' + escapeHtml((popupState.activeRow || {}).Dft_release || '-') + '</span>' +
-            '<span><b>Comments:</b> ' + escapeHtml((popupState.activeRow || {}).Comments || '-') + '</span>' +
-            '</div>' +
-            '</div>' +
-            '</section>' +
-            '<section class="apr-watchlist-card">' +
-            '<h2 class="apr-watchlist-panel-title">Weekly View</h2>' +
-            '<div class="apr-watchlist-controls">' +
-            '<select id="apr-watchlist-select" class="apr-watchlist-select"' + (popupState.isLoading ? ' disabled' : '') + '>' +
-            viewOptionsHtml +
-            '</select>' +
-            '<div class="apr-watchlist-pill-row">' +
-            (selectedView && selectedView.isEditable
-                ? '<span class="apr-watchlist-pill current">Editable Current Week</span>'
-                : '<span class="apr-watchlist-pill archive">Archived Snapshot</span>') +
-            (selectedView ? '<span class="apr-watchlist-pill">' + escapeHtml(selectedView.weekLabel || '') + '</span>' : '') +
-            '<span class="apr-watchlist-pill">' + escapeHtml(currentCountText) + '</span>' +
-            '</div>' +
-            '<p class="apr-watchlist-note">' +
-            'APR Weekly allows up to 3 runs in the active week. Archived weekly snapshots are view-only and are kept in <code>apr_weekly</code>.' +
-            '</p>' +
-            '</div>' +
-            '</section>' +
-            '</div>' +
-            '<section class="apr-watchlist-card">' +
-            '<h2 class="apr-watchlist-panel-title">' + escapeHtml(selectedView ? selectedView.selectLabel : 'Weekly Runs') + '</h2>' +
-            renderRunsTable(selectedView) +
-            '</section>' +
-            '</div>' +
-            '</div>';
-
-        var selectEl = doc.getElementById('apr-watchlist-select');
-        if (selectEl) {
-            selectEl.addEventListener('change', function (event) {
-                popupState.selectedViewKey = event.target.value;
-                renderPopup();
-            });
-        }
-
-        var refreshEl = doc.getElementById('apr-watchlist-refresh');
-        if (refreshEl) {
-            refreshEl.addEventListener('click', function () {
-                loadViews('Refreshing weekly watchlists...');
-            });
-        }
-
-        var addEl = doc.getElementById('apr-watchlist-add');
-        if (addEl) {
-            addEl.addEventListener('click', addSelectedRun);
-        }
-
-        Array.prototype.slice.call(doc.querySelectorAll('.apr-remove-run')).forEach(function (button) {
-            button.addEventListener('click', function () {
-                var view = findView(popupState.selectedViewKey);
-                var itemIndex = Number(button.getAttribute('data-item-index'));
-                var item = view && view.items ? view.items[itemIndex] : null;
-
-                if (!item) {
-                    setStatus('Watchlist item not found.', true);
-                    return;
-                }
-
-                removeRun(item.id);
-            });
-        });
-    }
-
-    function openWatchlistWindow(row) {
-        popupState.activeRow = row || null;
-        popupState.selectedViewKey = 'current';
-
-        if (!ensurePopupWindow()) {
-            return;
-        }
-
-        popupState.statusMessage = popupState.activeRow ? 'Selected run updated. You can add it to the current APR Weekly list.' : popupState.statusMessage;
-        popupState.statusIsError = false;
-        renderPopup();
-
-        loadViews(popupState.statusMessage).catch(function () {
-            return null;
-        });
-
-        if (popupWindow && !popupWindow.closed) {
-            popupWindow.focus();
-        }
-    }
-
-    window.APR_BUTTONS.push({
-        id: 'watchlist',
-        label: 'Watchlist',
-        className: 'ui mini button',
-        handler: function (row) {
-            openWatchlistWindow(row);
-        }
+    return aprWatchlistPopupState.popupWindow;
+  }
+
+  aprWatchlistPopupState.popupWindow = window.open('', APR_WATCHLIST_POPUP_NAME, APR_WATCHLIST_POPUP_FEATURES);
+
+  if (!aprWatchlistPopupState.popupWindow) {
+    window.alert('Unable to open the APR Watchlist window. Please allow pop-ups for this site.');
+    return null;
+  }
+
+  buildAprWatchlistPopupShell(aprWatchlistPopupState.popupWindow.document);
+  return aprWatchlistPopupState.popupWindow;
+}
+
+async function fetchAprWatchlistJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const result = await response.json().catch(() => ({}));
+
+  if (response.status === 401) {
+    window.location.href = '/';
+    throw new Error(result.error || 'session inactive');
+  }
+
+  if (!response.ok) {
+    throw new Error(result.error || 'Request failed');
+  }
+
+  return result;
+}
+
+function normalizeAprWatchlistRun(row) {
+  const sourceRow = row && typeof row === 'object' ? row : {};
+  const normalizedRun = {};
+
+  APR_WATCHLIST_TRACKER_FIELDS.forEach((fieldName) => {
+    const fieldValue = sourceRow[fieldName];
+    normalizedRun[fieldName] = fieldValue == null ? '' : String(fieldValue).trim();
+  });
+
+  if (!normalizedRun.Job || !normalizedRun.Milestone || !normalizedRun.Block || !normalizedRun.Stage) {
+    throw new Error('Run must include Job, Milestone, Block, and Stage.');
+  }
+
+  return normalizedRun;
+}
+
+function canAddAprWatchlistRun(row) {
+  try {
+    normalizeAprWatchlistRun(row);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function applyAprWatchlistPayload(payload) {
+  aprWatchlistPopupState.userId = String(payload.user_id || '');
+  aprWatchlistPopupState.defaultWatchlist = String(payload.default_watchlist || 'APR Weekly');
+  aprWatchlistPopupState.watchlists = Array.isArray(payload.watchlists) ? payload.watchlists : [];
+
+  if (!aprWatchlistPopupState.watchlists.length) {
+    aprWatchlistPopupState.selectedWatchlistName = '';
+    return;
+  }
+
+  if (findSelectedAprWatchlist()) {
+    return;
+  }
+
+  const defaultWatchlist = aprWatchlistPopupState.watchlists.find((watchlist) => watchlist.is_default);
+  aprWatchlistPopupState.selectedWatchlistName = defaultWatchlist
+    ? defaultWatchlist.name
+    : aprWatchlistPopupState.watchlists[0].name;
+}
+
+function setAprWatchlistPopupStatus(message, isError) {
+  aprWatchlistPopupState.statusMessage = message || '';
+  aprWatchlistPopupState.statusIsError = Boolean(isError);
+}
+
+async function loadAprWatchlistPopupState(message) {
+  aprWatchlistPopupState.isLoading = true;
+  setAprWatchlistPopupStatus(message || 'Loading watchlists...', false);
+  renderAprWatchlistPopup();
+
+  try {
+    const payload = await fetchAprWatchlistJson('/api/apr-watchlist');
+    applyAprWatchlistPayload(payload);
+    aprWatchlistPopupState.isLoading = false;
+    setAprWatchlistPopupStatus(message || '', false);
+    renderAprWatchlistPopup();
+  } catch (error) {
+    aprWatchlistPopupState.isLoading = false;
+    setAprWatchlistPopupStatus(error.message, true);
+    renderAprWatchlistPopup();
+  }
+}
+
+function findSelectedAprWatchlist() {
+  return aprWatchlistPopupState.watchlists.find(
+    (watchlist) => watchlist.name === aprWatchlistPopupState.selectedWatchlistName
+  ) || null;
+}
+
+function getPopupRowLabel(row) {
+  if (typeof window.getAPRTrackerRowLabel === 'function') {
+    return window.getAPRTrackerRowLabel(row || {});
+  }
+
+  return [row.Job, row.Milestone, row.Block, row.Stage]
+    .filter((value) => value)
+    .join(' / ');
+}
+
+function buildPopupSelectedRunMarkup() {
+  if (!aprWatchlistPopupState.activeRow) {
+    return '<div class="popup-empty">Select a tracker row to add it into a watchlist.</div>';
+  }
+
+  let normalizedRun;
+
+  try {
+    normalizedRun = normalizeAprWatchlistRun(aprWatchlistPopupState.activeRow);
+  } catch (error) {
+    return `<div class="popup-empty">${escapeAprWatchlistHtml(error.message)}</div>`;
+  }
+
+  return [
+    ['Run', getPopupRowLabel(normalizedRun)],
+    ['Status', normalizedRun.Status || '-'],
+    ['Promote', normalizedRun.Promote || '-'],
+    ['Owner', normalizedRun.User || '-'],
+    ['DFT Release', normalizedRun.Dft_release || '-'],
+    ['Comments', normalizedRun.Comments || '-'],
+  ]
+    .map(([key, value]) => `
+      <div class="popup-summary-item">
+        <span class="popup-summary-key">${escapeAprWatchlistHtml(key)}</span>
+        <span class="popup-summary-value">${escapeAprWatchlistHtml(value)}</span>
+      </div>
+    `)
+    .join('');
+}
+
+function buildPopupWatchlistButtonsMarkup() {
+  if (!aprWatchlistPopupState.watchlists.length) {
+    return '<div class="popup-empty">No watchlists available.</div>';
+  }
+
+  return aprWatchlistPopupState.watchlists
+    .map((watchlist) => {
+      const isActive = watchlist.name === aprWatchlistPopupState.selectedWatchlistName;
+      const watchlistType = watchlist.is_default
+        ? `Weekly default${watchlist.week_label ? ` · ${watchlist.week_label}` : ''}`
+        : 'Custom watchlist';
+
+      return `
+        <button
+          type="button"
+          class="popup-watchlist-button${isActive ? ' active' : ''}"
+          data-watchlist-name="${escapeAprWatchlistHtml(watchlist.name)}"
+        >
+          <span class="popup-watchlist-title">
+            <span>${escapeAprWatchlistHtml(watchlist.name)}</span>
+            <span class="popup-badge">${watchlist.item_count}</span>
+          </span>
+          <span class="popup-watchlist-meta">
+            ${watchlistType} &middot; ${watchlist.per_block_limit} / block
+          </span>
+        </button>
+      `;
+    })
+    .join('');
+}
+
+function buildPopupBlockChipsMarkup(watchlist) {
+  const blockCounts = {};
+
+  if (!watchlist || !Array.isArray(watchlist.items)) {
+    return '';
+  }
+
+  watchlist.items.forEach((item) => {
+    const blockName = String(item.Block || '').trim() || 'Unknown Block';
+    blockCounts[blockName] = (blockCounts[blockName] || 0) + 1;
+  });
+
+  return Object.keys(blockCounts)
+    .sort((leftName, rightName) => leftName.localeCompare(rightName))
+    .map((blockName) => `
+      <span class="popup-chip">
+        ${escapeAprWatchlistHtml(blockName)}: ${blockCounts[blockName]}/${watchlist.per_block_limit}
+      </span>
+    `)
+    .join('');
+}
+
+function buildPopupWatchlistRowsMarkup(watchlist) {
+  if (!watchlist || !Array.isArray(watchlist.items) || !watchlist.items.length) {
+    return '<div class="popup-empty">No runs are saved in this watchlist yet.</div>';
+  }
+
+  const rowsHtml = watchlist.items
+    .map((item) => `
+      <tr>
+        <td>${escapeAprWatchlistHtml(item.Job || '-')}</td>
+        <td>${escapeAprWatchlistHtml(item.Milestone || '-')}</td>
+        <td>${escapeAprWatchlistHtml(item.Block || '-')}</td>
+        <td>${escapeAprWatchlistHtml(item.Stage || '-')}</td>
+        <td>${buildPopupStatusPillMarkup(item.Status)}</td>
+        <td>${buildPopupPromotePillMarkup(item.Promote)}</td>
+        <td>${escapeAprWatchlistHtml(formatAprWatchlistTimestamp(item.created_at))}</td>
+        <td>
+          <button
+            type="button"
+            class="popup-button danger"
+            data-item-id="${item.id}"
+            ${aprWatchlistPopupState.isLoading ? 'disabled' : ''}
+          >
+            Remove
+          </button>
+        </td>
+      </tr>
+    `)
+    .join('');
+
+  return (
+    '<div class="popup-table-wrap">' +
+    '<table class="popup-table">' +
+    '<thead>' +
+    '<tr>' +
+    '<th>Job</th>' +
+    '<th>Milestone</th>' +
+    '<th>Block</th>' +
+    '<th>Stage</th>' +
+    '<th>Status</th>' +
+    '<th>Promote</th>' +
+    '<th>Added</th>' +
+    '<th>Action</th>' +
+    '</tr>' +
+    '</thead>' +
+    `<tbody>${rowsHtml}</tbody>` +
+    '</table>' +
+    '</div>'
+  );
+}
+
+function buildPopupStatusPillMarkup(statusValue) {
+  const toneClass = getPopupStatusToneClass(statusValue);
+  return `<span class="popup-status-pill${toneClass ? ` ${toneClass}` : ''}">${escapeAprWatchlistHtml(statusValue || '-')}</span>`;
+}
+
+function buildPopupPromotePillMarkup(promoteValue) {
+  const normalizedValue = String(promoteValue || '').trim().toLowerCase();
+  const toneClass = normalizedValue === 'yes' ? 'is-positive' : normalizedValue === 'no' ? 'is-negative' : '';
+  return `<span class="popup-promote-pill${toneClass ? ` ${toneClass}` : ''}">${escapeAprWatchlistHtml(promoteValue || '-')}</span>`;
+}
+
+function getPopupStatusToneClass(statusValue) {
+  const normalizedStatus = String(statusValue || '').trim().toLowerCase();
+
+  if (normalizedStatus === 'completed') {
+    return 'is-positive';
+  }
+
+  if (normalizedStatus === 'await extraction') {
+    return 'is-warning';
+  }
+
+  if (normalizedStatus === 'job running' || normalizedStatus === 'extracting') {
+    return 'is-info';
+  }
+
+  if (normalizedStatus === 'job failed' || normalizedStatus === 'extraction failed') {
+    return 'is-negative';
+  }
+
+  return '';
+}
+
+function formatAprWatchlistTimestamp(timestamp) {
+  if (!timestamp) {
+    return '-';
+  }
+
+  return String(timestamp).replace('T', ' ').replace('Z', '');
+}
+
+function escapeAprWatchlistHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function renderAprWatchlistPopup() {
+  const popupWindow = ensureAprWatchlistPopupWindow();
+  if (!popupWindow) {
+    return;
+  }
+
+  const doc = popupWindow.document;
+  const root = doc.getElementById('apr-watchlist-root');
+  const selectedWatchlist = findSelectedAprWatchlist();
+  const addDisabled = aprWatchlistPopupState.isLoading || !selectedWatchlist || !canAddAprWatchlistRun(aprWatchlistPopupState.activeRow);
+  const deleteDisabled = aprWatchlistPopupState.isLoading || !selectedWatchlist || selectedWatchlist.is_default;
+  const statusClassName = aprWatchlistPopupState.statusIsError ? 'popup-status error' : 'popup-status';
+  const activeWatchlistName = selectedWatchlist ? selectedWatchlist.name : 'No watchlist selected';
+  const activeWatchlistMeta = selectedWatchlist
+    ? (selectedWatchlist.is_default
+      ? `${selectedWatchlist.item_count} runs in the current APR Weekly bucket${selectedWatchlist.week_label ? ` (${selectedWatchlist.week_label})` : ''}`
+      : `${selectedWatchlist.item_count} runs in this user-defined watchlist`)
+    : 'Create or select a watchlist to manage it here.';
+  const activeWatchlistLimits = selectedWatchlist
+    ? (selectedWatchlist.is_default
+      ? `APR Weekly resets automatically every ISO week and allows up to ${selectedWatchlist.per_block_limit} runs per block${selectedWatchlist.week_label ? `. Current week: ${selectedWatchlist.week_label}` : '.'}`
+      : `This watchlist allows up to ${selectedWatchlist.per_block_limit} runs per block.`)
+    : 'Select a watchlist to view its limits.';
+  const blockChipMarkup = buildPopupBlockChipsMarkup(selectedWatchlist);
+
+  root.innerHTML =
+    '<div class="popup-card">' +
+    '<div class="popup-header">' +
+    '<div>' +
+    '<h1 class="popup-title">APR Watchlist Manager</h1>' +
+    '<p class="popup-subtitle">Use this popup to create or delete watchlists, then add or remove APR runs without leaving the tracker. APR Weekly resets automatically each ISO week.</p>' +
+    '</div>' +
+    '<div class="popup-toolbar">' +
+    `<button type="button" class="popup-button secondary" id="popup-refresh"${aprWatchlistPopupState.isLoading ? ' disabled' : ''}>Refresh</button>` +
+    '</div>' +
+    '</div>' +
+    `<div class="${statusClassName}">${escapeAprWatchlistHtml(aprWatchlistPopupState.statusMessage || (aprWatchlistPopupState.isLoading ? 'Loading watchlists...' : ''))}</div>` +
+    '<div class="popup-layout">' +
+    '<div class="popup-stack">' +
+    '<section class="popup-section">' +
+    '<div class="popup-header" style="margin-bottom: 12px;">' +
+    '<div>' +
+    '<h2 class="popup-section-title" style="margin: 0;">Selected APR Run</h2>' +
+    '<p class="popup-copy">Signed in as ' + escapeAprWatchlistHtml(aprWatchlistPopupState.userId || '-') + '</p>' +
+    '</div>' +
+    `<button type="button" class="popup-button" id="popup-add-run"${addDisabled ? ' disabled' : ''}>Add To Selected Watchlist</button>` +
+    '</div>' +
+    `<div class="popup-summary-grid">${buildPopupSelectedRunMarkup()}</div>` +
+    '</section>' +
+    '<section class="popup-section">' +
+    '<h2 class="popup-section-title">Create Watchlist</h2>' +
+    '<form id="popup-create-form">' +
+    '<label class="popup-label" for="popup-watchlist-name">Watchlist name</label>' +
+    '<div class="popup-inline-form">' +
+    `<input id="popup-watchlist-name" class="popup-input" type="text" maxlength="80" placeholder="Tapeout Focus" value="${escapeAprWatchlistHtml(aprWatchlistPopupState.draftWatchlistName)}"${aprWatchlistPopupState.isLoading ? ' disabled' : ''} />` +
+    `<button type="submit" class="popup-button"${aprWatchlistPopupState.isLoading ? ' disabled' : ''}>Create</button>` +
+    '</div>' +
+    '</form>' +
+    '</section>' +
+    '<section class="popup-section">' +
+    '<h2 class="popup-section-title">Available Watchlists</h2>' +
+    `<div class="popup-watchlists">${buildPopupWatchlistButtonsMarkup()}</div>` +
+    '</section>' +
+    '</div>' +
+    '<section class="popup-section">' +
+    '<div class="popup-header">' +
+    '<div>' +
+    `<h2 class="popup-section-title" style="margin: 0;">${escapeAprWatchlistHtml(activeWatchlistName)}</h2>` +
+    `<p class="popup-copy">${escapeAprWatchlistHtml(activeWatchlistMeta)}</p>` +
+    '</div>' +
+    `<button type="button" class="popup-button danger" id="popup-delete-watchlist"${deleteDisabled ? ' disabled' : ''}>Delete Watchlist</button>` +
+    '</div>' +
+    `<p class="popup-copy" style="margin-bottom: 12px;">${escapeAprWatchlistHtml(activeWatchlistLimits)}</p>` +
+    `<div class="popup-chip-row">${blockChipMarkup}</div>` +
+    buildPopupWatchlistRowsMarkup(selectedWatchlist) +
+    '</section>' +
+    '</div>' +
+    '</div>';
+
+  attachAprWatchlistPopupEvents(doc);
+}
+
+function attachAprWatchlistPopupEvents(doc) {
+  const refreshButton = doc.getElementById('popup-refresh');
+  const createForm = doc.getElementById('popup-create-form');
+  const addButton = doc.getElementById('popup-add-run');
+  const deleteButton = doc.getElementById('popup-delete-watchlist');
+
+  if (refreshButton) {
+    refreshButton.addEventListener('click', handleAprWatchlistPopupRefresh);
+  }
+
+  if (createForm) {
+    createForm.addEventListener('submit', handleAprWatchlistPopupCreateSubmit);
+  }
+
+  if (addButton) {
+    addButton.addEventListener('click', handleAprWatchlistPopupAddRun);
+  }
+
+  if (deleteButton) {
+    deleteButton.addEventListener('click', handleAprWatchlistPopupDeleteWatchlist);
+  }
+
+  Array.from(doc.querySelectorAll('[data-watchlist-name]')).forEach((button) => {
+    button.addEventListener('click', handleAprWatchlistPopupSelectWatchlist);
+  });
+
+  Array.from(doc.querySelectorAll('[data-item-id]')).forEach((button) => {
+    button.addEventListener('click', handleAprWatchlistPopupRemoveRun);
+  });
+}
+
+function handleAprWatchlistPopupRefresh() {
+  loadAprWatchlistPopupState('Refreshing watchlists...');
+}
+
+async function handleAprWatchlistPopupCreateSubmit(event) {
+  event.preventDefault();
+
+  const popupWindow = ensureAprWatchlistPopupWindow();
+  const nameInput = popupWindow && popupWindow.document.getElementById('popup-watchlist-name');
+  const watchlistName = nameInput ? String(nameInput.value || '').trim() : '';
+  aprWatchlistPopupState.draftWatchlistName = watchlistName;
+
+  if (!watchlistName) {
+    setAprWatchlistPopupStatus('Enter a watchlist name first.', true);
+    renderAprWatchlistPopup();
+    return;
+  }
+
+  aprWatchlistPopupState.isLoading = true;
+  setAprWatchlistPopupStatus('Creating watchlist...', false);
+  renderAprWatchlistPopup();
+
+  try {
+    const payload = await fetchAprWatchlistJson('/api/apr-watchlist/create-watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ watchlist_name: watchlistName }),
     });
-})();
+
+    aprWatchlistPopupState.selectedWatchlistName = watchlistName;
+    applyAprWatchlistPayload(payload);
+    aprWatchlistPopupState.draftWatchlistName = '';
+    aprWatchlistPopupState.isLoading = false;
+    setAprWatchlistPopupStatus(payload.message || 'watchlist created', false);
+    renderAprWatchlistPopup();
+  } catch (error) {
+    aprWatchlistPopupState.isLoading = false;
+    setAprWatchlistPopupStatus(error.message, true);
+    renderAprWatchlistPopup();
+  }
+}
+
+function handleAprWatchlistPopupSelectWatchlist(event) {
+  const watchlistName = event.currentTarget.getAttribute('data-watchlist-name');
+  if (!watchlistName) {
+    return;
+  }
+
+  aprWatchlistPopupState.selectedWatchlistName = watchlistName;
+  setAprWatchlistPopupStatus('', false);
+  renderAprWatchlistPopup();
+}
+
+async function handleAprWatchlistPopupAddRun() {
+  const selectedWatchlist = findSelectedAprWatchlist();
+  let normalizedRun;
+
+  if (!selectedWatchlist) {
+    setAprWatchlistPopupStatus('Select a watchlist first.', true);
+    renderAprWatchlistPopup();
+    return;
+  }
+
+  try {
+    normalizedRun = normalizeAprWatchlistRun(aprWatchlistPopupState.activeRow);
+  } catch (error) {
+    setAprWatchlistPopupStatus(error.message, true);
+    renderAprWatchlistPopup();
+    return;
+  }
+
+  aprWatchlistPopupState.isLoading = true;
+  setAprWatchlistPopupStatus('Adding selected run...', false);
+  renderAprWatchlistPopup();
+
+  try {
+    const payload = await fetchAprWatchlistJson('/api/apr-watchlist/add-run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        watchlist_name: selectedWatchlist.name,
+        run: normalizedRun,
+      }),
+    });
+
+    applyAprWatchlistPayload(payload);
+    aprWatchlistPopupState.isLoading = false;
+    setAprWatchlistPopupStatus(payload.message || 'run added to watchlist', false);
+    renderAprWatchlistPopup();
+  } catch (error) {
+    aprWatchlistPopupState.isLoading = false;
+    setAprWatchlistPopupStatus(error.message, true);
+    renderAprWatchlistPopup();
+  }
+}
+
+async function handleAprWatchlistPopupDeleteWatchlist() {
+  const popupWindow = ensureAprWatchlistPopupWindow();
+  const selectedWatchlist = findSelectedAprWatchlist();
+
+  if (!selectedWatchlist || selectedWatchlist.is_default) {
+    return;
+  }
+
+  if (!popupWindow.confirm(`Delete watchlist "${selectedWatchlist.name}" and all of its saved runs?`)) {
+    return;
+  }
+
+  aprWatchlistPopupState.isLoading = true;
+  setAprWatchlistPopupStatus('Deleting watchlist...', false);
+  renderAprWatchlistPopup();
+
+  try {
+    const payload = await fetchAprWatchlistJson('/api/apr-watchlist/delete-watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ watchlist_name: selectedWatchlist.name }),
+    });
+
+    aprWatchlistPopupState.selectedWatchlistName = aprWatchlistPopupState.defaultWatchlist;
+    applyAprWatchlistPayload(payload);
+    aprWatchlistPopupState.isLoading = false;
+    setAprWatchlistPopupStatus(payload.message || 'watchlist deleted', false);
+    renderAprWatchlistPopup();
+  } catch (error) {
+    aprWatchlistPopupState.isLoading = false;
+    setAprWatchlistPopupStatus(error.message, true);
+    renderAprWatchlistPopup();
+  }
+}
+
+async function handleAprWatchlistPopupRemoveRun(event) {
+  const popupWindow = ensureAprWatchlistPopupWindow();
+  const itemId = Number(event.currentTarget.getAttribute('data-item-id'));
+
+  if (!itemId) {
+    return;
+  }
+
+  if (!popupWindow.confirm('Remove this run from the selected watchlist?')) {
+    return;
+  }
+
+  aprWatchlistPopupState.isLoading = true;
+  setAprWatchlistPopupStatus('Removing run...', false);
+  renderAprWatchlistPopup();
+
+  try {
+    const payload = await fetchAprWatchlistJson('/api/apr-watchlist/delete-run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_id: itemId }),
+    });
+
+    applyAprWatchlistPayload(payload);
+    aprWatchlistPopupState.isLoading = false;
+    setAprWatchlistPopupStatus(payload.message || 'run removed from watchlist', false);
+    renderAprWatchlistPopup();
+  } catch (error) {
+    aprWatchlistPopupState.isLoading = false;
+    setAprWatchlistPopupStatus(error.message, true);
+    renderAprWatchlistPopup();
+  }
+}
+
+function openAprWatchlistPopup(row) {
+  aprWatchlistPopupState.activeRow = row || null;
+
+  if (!ensureAprWatchlistPopupWindow()) {
+    return;
+  }
+
+  setAprWatchlistPopupStatus(
+    aprWatchlistPopupState.activeRow
+      ? 'Selected run updated. Choose a watchlist to add it.'
+      : aprWatchlistPopupState.statusMessage,
+    false
+  );
+  renderAprWatchlistPopup();
+  loadAprWatchlistPopupState(aprWatchlistPopupState.statusMessage);
+
+  if (aprWatchlistPopupState.popupWindow && !aprWatchlistPopupState.popupWindow.closed) {
+    aprWatchlistPopupState.popupWindow.focus();
+  }
+}
+
+function isAprWatchlistButtonDisabled(row) {
+  return String((row && row.Status) || '').trim().toLowerCase() !== 'completed';
+}
+
+function registerAprWatchlistButton() {
+  const hasExistingButton = window.APR_BUTTONS.some((buttonConfig) => buttonConfig && buttonConfig.id === 'watchlist');
+  if (hasExistingButton) {
+    return;
+  }
+
+  window.APR_BUTTONS.push({
+    id: 'watchlist',
+    label: 'Watchlist',
+    className: 'ui mini button',
+    disabled: isAprWatchlistButtonDisabled,
+    handler: openAprWatchlistPopup,
+  });
+}
+
+registerAprWatchlistButton();

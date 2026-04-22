@@ -80,16 +80,33 @@ body {
 .dt-actions {
   white-space: nowrap;
   position: relative;
+  min-width: 180px;
+}
+
+.apr-action-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .dt-actions .ui.button,
 .dt-actions .apr-action-menu {
-  margin-right: 4px;
+  margin-right: 0;
+}
+
+.dt-actions .ui.button:disabled,
+.dt-actions .apr-action-menu-item:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .apr-action-menu {
   position: relative;
   display: inline-block;
+}
+
+.apr-action-summary {
+  margin: 0 !important;
 }
 
 .dt-actions.is-menu-open {
@@ -115,7 +132,9 @@ body {
   top: calc(100% + 4px);
   right: 0;
   z-index: 20;
-  min-width: 140px;
+  min-width: 160px;
+  width: max-content;
+  max-width: 220px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -124,12 +143,41 @@ body {
   border-radius: 0.28571429rem;
   background: #ffffff;
   box-shadow: 0 2px 12px rgba(34, 36, 38, 0.15);
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .apr-action-menu-item {
+  display: block !important;
   width: 100%;
+  box-sizing: border-box;
   margin: 0 !important;
   text-align: left;
+  white-space: nowrap;
+}
+
+.apr-tracker-cell-tone {
+  font-weight: 600;
+}
+
+.apr-tracker-cell-tone-success {
+  background: #e9f8ec !important;
+  color: #1f5e31;
+}
+
+.apr-tracker-cell-tone-warning {
+  background: #fff4dc !important;
+  color: #8a5a00;
+}
+
+.apr-tracker-cell-tone-danger {
+  background: #fde8e7 !important;
+  color: #9b2c2c;
+}
+
+.apr-tracker-cell-tone-info {
+  background: #e7f1fb !important;
+  color: #1f4f8c;
 }
 
 #aprTrackerTable {

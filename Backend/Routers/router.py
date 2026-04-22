@@ -125,6 +125,11 @@ def register_routes(app):
         payload, status_code = apr_watchlist.delete_run(request.get_json(silent=True) or {})
         return jsonify(payload), status_code
 
+    @app.route('/api/apr-watchlist/timing-data', methods=['GET'])
+    def apr_watchlist_timing_data_route():
+        payload, status_code = apr_watchlist.get_timing_data(request.args.to_dict())
+        return jsonify(payload), status_code
+
     # =========================
     # PYTHON EXEC
     # =========================

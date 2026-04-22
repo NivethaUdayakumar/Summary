@@ -9,44 +9,75 @@
 </head>
 <body>
   <div class="watchlist-shell">
-    <aside class="watchlist-sidebar">
-      <div class="watchlist-brand">
-        <p class="watchlist-eyebrow">APR Monitor</p>
-        <h1>Watchlists</h1>
-        <p class="watchlist-copy">Create user-specific watchlists, keep the default weekly queue, and cap the number of runs tracked per block.</p>
-      </div>
-
-      <div class="watchlist-user-bar">
-        <span class="watchlist-user-label">Signed in as</span>
-        <strong id="watchlistUserId">-</strong>
-      </div>
-
-      <form id="createWatchlistForm" class="watchlist-create-form">
-        <label for="newWatchlistName">Create a watchlist</label>
-        <div class="watchlist-inline-form">
-          <input id="newWatchlistName" type="text" maxlength="80" placeholder="Tapeout Focus" />
-          <button type="submit" class="ui primary button">Create</button>
-        </div>
-      </form>
-
-      <div class="watchlist-list-wrap">
-        <div class="watchlist-section-title">Available watchlists</div>
-        <div id="watchlistList" class="watchlist-list"></div>
-      </div>
-    </aside>
-
     <main class="watchlist-main">
+      <header class="watchlist-page-header">
+        <div class="watchlist-brand">
+          <p class="watchlist-eyebrow">APR Tracker</p>
+          <h1>APR Watchlist</h1>
+          <p class="watchlist-copy">
+            Review saved APR watchlists and compare timing summary trends for each tracked block. Use the tracker popup to create watchlists and add or remove jobs.
+          </p>
+        </div>
+      </header>
+
       <div id="watchlistMessage" class="watchlist-message is-hidden"></div>
 
-      <section id="selectedRunPanel" class="watchlist-panel is-hidden">
+      <section class="watchlist-panel">
         <div class="watchlist-panel-header">
           <div>
-            <p class="watchlist-panel-eyebrow">Selected APR Run</p>
-            <h2>Add from APR Tracker</h2>
+            <p class="watchlist-panel-eyebrow">Timing Viewer</p>
+            <h2>APR Timing Summary</h2>
+            <p class="watchlist-panel-copy">
+              Compare setup timing summaries across the saved runs in the selected watchlist.
+            </p>
           </div>
-          <button id="addSelectedRunButton" type="button" class="ui primary button">Add To Current Watchlist</button>
         </div>
-        <div id="selectedRunSummary" class="watchlist-run-summary"></div>
+
+        <div class="watchlist-graph-shell">
+          <div class="watchlist-graph-menu">
+            <div class="watchlist-filter-section watchlist-overview-section">
+              <div class="watchlist-user-bar">
+                <span class="watchlist-user-label">Signed in as</span>
+                <strong id="watchlistUserId">-</strong>
+              </div>
+
+              <div class="watchlist-list-wrap">
+                <div class="watchlist-section-title">Available watchlists</div>
+                <div id="watchlistList" class="watchlist-list"></div>
+              </div>
+            </div>
+
+            <div class="watchlist-filter-section">
+              <h3>Filters</h3>
+
+              <label for="graphWatchlistSelect">Watchlist</label>
+              <select id="graphWatchlistSelect" class="watchlist-select"></select>
+
+              <label for="graphBlockSelect">Block</label>
+              <select id="graphBlockSelect" class="watchlist-select"></select>
+
+              <div class="watchlist-button-row">
+                <button id="applyGraphFiltersButton" type="button" class="ui primary button">Apply</button>
+                <button id="reloadGraphDataButton" type="button" class="ui button">Reload</button>
+              </div>
+            </div>
+
+            <div class="watchlist-filter-section">
+              <h3>Graphs</h3>
+              <div id="pathgroupCheckboxes" class="watchlist-checkbox-list"></div>
+            </div>
+          </div>
+
+          <div class="watchlist-graph-viewer">
+            <div class="watchlist-graph-toolbar">
+              <div class="watchlist-chip" id="watchlistSummaryChip">No data loaded</div>
+              <div class="watchlist-chip" id="watchlistSourceChip">Source: unknown</div>
+            </div>
+
+            <div id="watchlistNoticeArea"></div>
+            <div id="watchlistCardsContainer" class="watchlist-graph-cards"></div>
+          </div>
+        </div>
       </section>
 
       <section class="watchlist-panel">
@@ -56,7 +87,6 @@
             <h2 id="activeWatchlistName">APR Weekly</h2>
             <p id="activeWatchlistMeta" class="watchlist-panel-copy"></p>
           </div>
-          <button id="deleteWatchlistButton" type="button" class="ui button negative">Delete Watchlist</button>
         </div>
 
         <div id="activeWatchlistLimits" class="watchlist-limit-note"></div>
@@ -73,7 +103,6 @@
                 <th>Status</th>
                 <th>Promote</th>
                 <th>Added</th>
-                <th>Action</th>
               </tr>
             </thead>
             <tbody id="watchlistItemsBody"></tbody>
@@ -86,6 +115,7 @@
     </main>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="/static/Pages/APRWatchlist/APRWatchlist.js"></script>
 </body>
 </html>

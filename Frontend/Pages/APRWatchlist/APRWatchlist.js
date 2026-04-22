@@ -1,64 +1,71 @@
-const createWatchlistForm = document.getElementById('createWatchlistForm');
-const newWatchlistNameInput = document.getElementById('newWatchlistName');
+const GRAPH_STAGE_ORDER = ['PLACE', 'CLOCK', 'ROUTE'];
+const GRAPH_SEQUENTIAL_LABEL = 'Timing Setup Seq';
+const GRAPH_COLORS = [
+  '#1f6feb',
+  '#0f766e',
+  '#84a000',
+  '#dc6803',
+  '#d92d20',
+  '#2563eb',
+  '#1d4ed8',
+  '#15803d',
+];
+
 const watchlistUserId = document.getElementById('watchlistUserId');
 const watchlistList = document.getElementById('watchlistList');
 const watchlistMessage = document.getElementById('watchlistMessage');
-const selectedRunPanel = document.getElementById('selectedRunPanel');
-const selectedRunSummary = document.getElementById('selectedRunSummary');
-const addSelectedRunButton = document.getElementById('addSelectedRunButton');
 const activeWatchlistName = document.getElementById('activeWatchlistName');
 const activeWatchlistMeta = document.getElementById('activeWatchlistMeta');
 const activeWatchlistLimits = document.getElementById('activeWatchlistLimits');
 const activeWatchlistBlocks = document.getElementById('activeWatchlistBlocks');
-const deleteWatchlistButton = document.getElementById('deleteWatchlistButton');
 const watchlistItemsBody = document.getElementById('watchlistItemsBody');
 const watchlistEmptyState = document.getElementById('watchlistEmptyState');
+const graphWatchlistSelect = document.getElementById('graphWatchlistSelect');
+const graphBlockSelect = document.getElementById('graphBlockSelect');
+const applyGraphFiltersButton = document.getElementById('applyGraphFiltersButton');
+const reloadGraphDataButton = document.getElementById('reloadGraphDataButton');
+const pathgroupCheckboxes = document.getElementById('pathgroupCheckboxes');
+const watchlistSummaryChip = document.getElementById('watchlistSummaryChip');
+const watchlistSourceChip = document.getElementById('watchlistSourceChip');
+const watchlistNoticeArea = document.getElementById('watchlistNoticeArea');
+const watchlistCardsContainer = document.getElementById('watchlistCardsContainer');
 
 const watchlistState = {
   userId: '',
   defaultWatchlist: 'APR Weekly',
   selectedWatchlistName: '',
-  selectedRun: null,
   watchlists: [],
+  timingRuns: [],
+  timingBlocks: [],
+  timingPathgroups: [],
+  selectedBlock: '',
+  selectedPathgroups: [],
+  timingSource: 'unknown',
+  timingNotice: '',
+  timingNoticeIsError: false,
+  activeCharts: [],
 };
 
 window.addEventListener('DOMContentLoaded', initializeAprWatchlistPage);
 
 async function initializeAprWatchlistPage() {
   document.body.dataset.page = 'apr-watchlist';
-  watchlistState.selectedRun = getSelectedRunFromQuery();
-  bindWatchlistEvents();
+  bindAprWatchlistEvents();
 
   try {
-    await loadWatchlists();
+    await reloadAprWatchlistPageData();
   } catch (error) {
     showWatchlistMessage(error.message, false);
   }
 }
 
-function bindWatchlistEvents() {
-  createWatchlistForm.addEventListener('submit', handleCreateWatchlist);
+function bindAprWatchlistEvents() {
   watchlistList.addEventListener('click', handleWatchlistSelection);
-  addSelectedRunButton.addEventListener('click', handleAddSelectedRun);
-  deleteWatchlistButton.addEventListener('click', handleDeleteWatchlist);
-  watchlistItemsBody.addEventListener('click', handleWatchlistTableClick);
-}
-
-function getSelectedRunFromQuery() {
-  const query = new URLSearchParams(window.location.search);
-  const runParam = query.get('run');
-
-  if (!runParam) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(runParam);
-    return parsed && typeof parsed === 'object' ? parsed : null;
-  } catch (error) {
-    console.error(error);
-    return null;
-  }
+  graphWatchlistSelect.addEventListener('change', handleGraphWatchlistChange);
+  graphBlockSelect.addEventListener('change', handleGraphBlockChange);
+  applyGraphFiltersButton.addEventListener('click', handleApplyGraphFilters);
+  reloadGraphDataButton.addEventListener('click', handleReloadGraphData);
+  pathgroupCheckboxes.addEventListener('change', handlePathgroupSelectionChange);
 }
 
 async function fetchJson(url, options = {}) {
@@ -77,9 +84,12 @@ async function fetchJson(url, options = {}) {
   return result;
 }
 
-async function loadWatchlists() {
+async function reloadAprWatchlistPageData() {
+  showWatchlistMessage('', true);
   const payload = await fetchJson('/api/apr-watchlist');
   applyWatchlistPayload(payload);
+  await loadTimingDataForSelectedWatchlist();
+  renderAprWatchlistPage();
 }
 
 function applyWatchlistPayload(payload) {
@@ -89,20 +99,88 @@ function applyWatchlistPayload(payload) {
 
   if (!watchlistState.watchlists.length) {
     watchlistState.selectedWatchlistName = '';
-  } else if (!findSelectedWatchlist()) {
-    const defaultWatchlist = watchlistState.watchlists.find((watchlist) => watchlist.is_default);
-    watchlistState.selectedWatchlistName = defaultWatchlist
-      ? defaultWatchlist.name
-      : watchlistState.watchlists[0].name;
+    return;
   }
 
-  renderWatchlistPage();
+  if (findSelectedWatchlist()) {
+    return;
+  }
+
+  const defaultWatchlist = watchlistState.watchlists.find((watchlist) => watchlist.is_default);
+  watchlistState.selectedWatchlistName = defaultWatchlist
+    ? defaultWatchlist.name
+    : watchlistState.watchlists[0].name;
 }
 
-function renderWatchlistPage() {
+async function loadTimingDataForSelectedWatchlist() {
+  const selectedWatchlist = findSelectedWatchlist();
+
+  if (!selectedWatchlist) {
+    applyTimingPayload({
+      watchlist_name: '',
+      source: 'unknown',
+      blocks: [],
+      pathgroups: [],
+      runs: [],
+      default_block: '',
+    });
+    return;
+  }
+
+  setTimingNotice('Loading timing data for the selected watchlist...', false);
+  renderTimingViewer();
+
+  try {
+    const payload = await fetchJson(`/api/apr-watchlist/timing-data?watchlist_name=${encodeURIComponent(selectedWatchlist.name)}`);
+    applyTimingPayload(payload);
+  } catch (error) {
+    applyTimingPayload({
+      watchlist_name: selectedWatchlist.name,
+      source: 'unknown',
+      blocks: [],
+      pathgroups: [],
+      runs: [],
+      default_block: '',
+    });
+    setTimingNotice(error.message, true);
+  }
+}
+
+function applyTimingPayload(payload) {
+  const nextRuns = Array.isArray(payload.runs) ? payload.runs : [];
+  const nextBlocks = Array.isArray(payload.blocks) ? payload.blocks : [];
+  const nextPathgroups = Array.isArray(payload.pathgroups) ? payload.pathgroups : [];
+  const selectablePathgroups = buildSelectablePathgroups(nextPathgroups, nextRuns);
+
+  watchlistState.timingRuns = nextRuns;
+  watchlistState.timingBlocks = nextBlocks;
+  watchlistState.timingPathgroups = nextPathgroups;
+  watchlistState.timingSource = String(payload.source || 'unknown');
+
+  if (!nextBlocks.includes(watchlistState.selectedBlock)) {
+    watchlistState.selectedBlock = String(payload.default_block || nextBlocks[0] || '');
+  }
+
+  watchlistState.selectedPathgroups = watchlistState.selectedPathgroups.filter((pathgroup) =>
+    selectablePathgroups.includes(pathgroup)
+  );
+
+  if (!watchlistState.selectedPathgroups.length) {
+    watchlistState.selectedPathgroups = selectablePathgroups.slice();
+  }
+
+  if (!watchlistState.timingRuns.length) {
+    setTimingNotice('No timing summary rows are available for this watchlist yet.', false);
+  } else if (!watchlistState.timingNoticeIsError) {
+    setTimingNotice('Timing Setup Seq uses apr-tracker setup sequence fields. Pathgroup charts use APR_TIMING_SUMMARY rows only.', false);
+  }
+}
+
+function renderAprWatchlistPage() {
   watchlistUserId.textContent = watchlistState.userId || '-';
   renderWatchlistList();
-  renderSelectedRunPanel();
+  renderTimingControls();
+  renderTimingViewer();
   renderActiveWatchlist();
 }
 
@@ -116,6 +194,10 @@ function renderWatchlistList() {
     .map((watchlist) => {
       const isActive = watchlist.name === watchlistState.selectedWatchlistName;
       const limitLabel = `${watchlist.per_block_limit} / block`;
+      const watchlistType = watchlist.is_default
+        ? `Weekly default${watchlist.week_label ? ` · ${watchlist.week_label}` : ''}`
+        : 'Custom watchlist';
+
       return `
         <button
           type="button"
@@ -127,7 +209,7 @@ function renderWatchlistList() {
             <span class="watchlist-badge">${watchlist.item_count}</span>
           </span>
           <span class="watchlist-list-meta">
-            ${watchlist.is_default ? 'Permanent default' : 'Custom watchlist'} &middot; ${limitLabel}
+            ${watchlistType} &middot; ${limitLabel}
           </span>
         </button>
       `;
@@ -135,40 +217,143 @@ function renderWatchlistList() {
     .join('');
 }
 
-function renderSelectedRunPanel() {
-  const selectedRun = watchlistState.selectedRun;
-  if (!selectedRun) {
-    selectedRunPanel.classList.add('is-hidden');
+function renderTimingControls() {
+  const selectedWatchlist = findSelectedWatchlist();
+  const watchlistNames = watchlistState.watchlists.map((watchlist) => watchlist.name);
+
+  setSelectOptions(
+    graphWatchlistSelect,
+    watchlistNames,
+    watchlistState.selectedWatchlistName,
+    'No watchlists'
+  );
+
+  setSelectOptions(
+    graphBlockSelect,
+    watchlistState.timingBlocks,
+    watchlistState.selectedBlock,
+    'No blocks'
+  );
+
+  renderPathgroupCheckboxes();
+
+  graphWatchlistSelect.disabled = !watchlistNames.length;
+  graphBlockSelect.disabled = !watchlistState.timingBlocks.length;
+  applyGraphFiltersButton.disabled = !selectedWatchlist;
+  reloadGraphDataButton.disabled = !selectedWatchlist;
+}
+
+function renderPathgroupCheckboxes() {
+  const selectablePathgroups = getSelectablePathgroups();
+
+  if (!selectablePathgroups.length) {
+    pathgroupCheckboxes.innerHTML = '<div class="watchlist-small">No graph options available for the selected watchlist.</div>';
     return;
   }
 
-  selectedRunPanel.classList.remove('is-hidden');
-  selectedRunSummary.innerHTML = buildRunSummaryMarkup(selectedRun);
-  addSelectedRunButton.disabled = !findSelectedWatchlist();
+  pathgroupCheckboxes.innerHTML = selectablePathgroups
+    .map((pathgroup) => `
+      <label class="watchlist-checkbox-item">
+        <input
+          type="checkbox"
+          class="watchlist-pathgroup-checkbox"
+          value="${escapeHtml(pathgroup)}"
+          ${watchlistState.selectedPathgroups.includes(pathgroup) ? 'checked' : ''}
+        />
+        <span>${escapeHtml(pathgroup)}</span>
+      </label>
+    `)
+    .join('');
+}
+
+function renderTimingViewer() {
+  const filteredRuns = getTimingRunsForSelectedBlock();
+  const selectedPathgroups = getSelectedPathgroups();
+  let renderedCards = 0;
+
+  destroyTimingCharts();
+  renderTimingNotice();
+
+  watchlistSummaryChip.textContent = watchlistState.timingRuns.length
+    ? `${filteredRuns.length} runs loaded`
+    : 'No timing data loaded';
+  watchlistSourceChip.textContent = `Source: ${watchlistState.timingSource || 'unknown'}`;
+
+  if (!filteredRuns.length) {
+    watchlistCardsContainer.innerHTML = `
+      <div class="watchlist-empty-state is-graph-empty">
+        No timing runs match the selected watchlist and block.
+      </div>
+    `;
+    return;
+  }
+
+  if (!selectedPathgroups.length) {
+    watchlistCardsContainer.innerHTML = `
+      <div class="watchlist-empty-state is-graph-empty">
+        Select at least one graph to render.
+      </div>
+    `;
+    return;
+  }
+
+  watchlistCardsContainer.innerHTML = '';
+
+  selectedPathgroups.forEach((pathgroup) => {
+    const series = buildGraphSeries(filteredRuns, pathgroup);
+
+    if (!series.length) {
+      return;
+    }
+
+    createTimingGraphCard(pathgroup, series);
+    renderedCards += 1;
+  });
+
+  if (!renderedCards) {
+    watchlistCardsContainer.innerHTML = `
+      <div class="watchlist-empty-state is-graph-empty">
+        The selected pathgroups do not have plottable data for this block.
+      </div>
+    `;
+  }
+}
+
+function renderTimingNotice() {
+  if (!watchlistState.timingNotice) {
+    watchlistNoticeArea.innerHTML = '';
+    return;
+  }
+
+  watchlistNoticeArea.innerHTML = `
+    <div class="watchlist-notice${watchlistState.timingNoticeIsError ? ' is-error' : ''}">
+      ${escapeHtml(watchlistState.timingNotice)}
+    </div>
+  `;
 }
 
 function renderActiveWatchlist() {
-  const watchlist = findSelectedWatchlist();
+  const selectedWatchlist = findSelectedWatchlist();
 
-  if (!watchlist) {
+  if (!selectedWatchlist) {
     activeWatchlistName.textContent = 'No watchlist selected';
     activeWatchlistMeta.textContent = '';
     activeWatchlistLimits.textContent = '';
     activeWatchlistBlocks.innerHTML = '';
-    deleteWatchlistButton.style.display = 'none';
     watchlistItemsBody.innerHTML = '';
     watchlistEmptyState.classList.remove('is-hidden');
     return;
   }
 
-  activeWatchlistName.textContent = watchlist.name;
-  activeWatchlistMeta.textContent = watchlist.is_default
-    ? `${watchlist.item_count} saved runs in the permanent default watchlist`
-    : `${watchlist.item_count} saved runs in this user-defined watchlist`;
-  activeWatchlistLimits.textContent = `This watchlist allows up to ${watchlist.per_block_limit} runs per unique block entry.`;
-  deleteWatchlistButton.style.display = watchlist.is_default ? 'none' : '';
-  renderBlockChips(watchlist);
-  renderWatchlistItems(watchlist);
+  activeWatchlistName.textContent = selectedWatchlist.name;
+  activeWatchlistMeta.textContent = selectedWatchlist.is_default
+    ? `${selectedWatchlist.item_count} saved runs in the current APR Weekly bucket${selectedWatchlist.week_label ? ` (${selectedWatchlist.week_label})` : ''}`
+    : `${selectedWatchlist.item_count} saved runs in this user-defined watchlist`;
+  activeWatchlistLimits.textContent = selectedWatchlist.is_default
+    ? `APR Weekly resets automatically every ISO week and allows up to ${selectedWatchlist.per_block_limit} runs per unique block entry${selectedWatchlist.week_label ? `. Current week: ${selectedWatchlist.week_label}` : '.'}`
+    : `This watchlist allows up to ${selectedWatchlist.per_block_limit} runs per unique block entry.`;
+  renderBlockChips(selectedWatchlist);
+  renderWatchlistItems(selectedWatchlist);
 }
 
 function renderBlockChips(watchlist) {
@@ -186,10 +371,11 @@ function renderBlockChips(watchlist) {
   }
 
   activeWatchlistBlocks.innerHTML = blockNames
-    .map((blockName) => {
-      const count = blockCounts[blockName];
-      return `<span class="watchlist-block-chip">${escapeHtml(blockName)}: ${count}/${watchlist.per_block_limit}</span>`;
-    })
+    .map((blockName) => `
+      <span class="watchlist-block-chip">
+        ${escapeHtml(blockName)}: ${blockCounts[blockName]}/${watchlist.per_block_limit}
+      </span>
+    `)
     .join('');
 }
 
@@ -208,151 +394,386 @@ function renderWatchlistItems(watchlist) {
         <td>${escapeHtml(item.Milestone || '-')}</td>
         <td>${escapeHtml(item.Block || '-')}</td>
         <td>${escapeHtml(item.Stage || '-')}</td>
-        <td>${escapeHtml(item.Status || '-')}</td>
-        <td>${escapeHtml(item.Promote || '-')}</td>
+        <td>${buildStatusPillMarkup(item.Status)}</td>
+        <td>${buildPromotePillMarkup(item.Promote)}</td>
         <td>${escapeHtml(formatTimestamp(item.created_at))}</td>
-        <td>
-          <button type="button" class="ui mini button negative" data-item-id="${item.id}">
-            Remove
-          </button>
-        </td>
       </tr>
     `)
     .join('');
 }
 
-function buildRunSummaryMarkup(run) {
-  const summaryFields = [
-    ['Job', run.Job],
-    ['Milestone', run.Milestone],
-    ['Block', run.Block],
-    ['Stage', run.Stage],
-    ['Status', run.Status],
-    ['Promote', run.Promote],
-    ['Owner', run.User],
-    ['DFT Release', run.Dft_release],
-  ];
-
-  return summaryFields
-    .map(([label, value]) => `
-      <div class="watchlist-summary-card">
-        <span class="watchlist-summary-card-label">${escapeHtml(label)}</span>
-        <span class="watchlist-summary-card-value">${escapeHtml(String(value || '-'))}</span>
-      </div>
-    `)
-    .join('');
-}
-
-async function handleCreateWatchlist(event) {
-  event.preventDefault();
-
-  const watchlistName = newWatchlistNameInput.value.trim();
-  if (!watchlistName) {
-    showWatchlistMessage('Enter a watchlist name first.', false);
-    return;
-  }
-
-  try {
-    const payload = await fetchJson('/api/apr-watchlist/create-watchlist', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ watchlist_name: watchlistName }),
-    });
-
-    watchlistState.selectedWatchlistName = watchlistName;
-    applyWatchlistPayload(payload);
-    newWatchlistNameInput.value = '';
-    showWatchlistMessage(payload.message || 'watchlist created', true);
-  } catch (error) {
-    showWatchlistMessage(error.message, false);
-  }
-}
-
-function handleWatchlistSelection(event) {
+async function handleWatchlistSelection(event) {
   const button = event.target.closest('[data-watchlist-name]');
   if (!button) {
     return;
   }
 
-  watchlistState.selectedWatchlistName = button.dataset.watchlistName;
-  renderWatchlistPage();
+  await selectWatchlist(button.dataset.watchlistName);
 }
 
-async function handleAddSelectedRun() {
-  const watchlist = findSelectedWatchlist();
-  if (!watchlist) {
-    showWatchlistMessage('Select a watchlist first.', false);
+async function handleGraphWatchlistChange(event) {
+  await selectWatchlist(event.target.value);
+}
+
+async function selectWatchlist(watchlistName) {
+  if (!watchlistName || watchlistName === watchlistState.selectedWatchlistName) {
+    renderAprWatchlistPage();
     return;
   }
 
-  if (!watchlistState.selectedRun) {
-    showWatchlistMessage('No APR run was passed into this window.', false);
+  watchlistState.selectedWatchlistName = watchlistName;
+  renderAprWatchlistPage();
+  await loadTimingDataForSelectedWatchlist();
+  renderAprWatchlistPage();
+}
+
+function handleGraphBlockChange(event) {
+  watchlistState.selectedBlock = event.target.value;
+  renderTimingViewer();
+}
+
+function handleApplyGraphFilters() {
+  updateSelectedPathgroupsFromInputs();
+  renderTimingViewer();
+}
+
+async function handleReloadGraphData() {
+  await loadTimingDataForSelectedWatchlist();
+  renderAprWatchlistPage();
+}
+
+function handlePathgroupSelectionChange() {
+  updateSelectedPathgroupsFromInputs();
+  renderTimingViewer();
+}
+
+function updateSelectedPathgroupsFromInputs() {
+  const checkboxes = pathgroupCheckboxes.querySelectorAll('.watchlist-pathgroup-checkbox:checked');
+  watchlistState.selectedPathgroups = Array.from(checkboxes).map((checkbox) => checkbox.value);
+}
+
+function setSelectOptions(selectElement, values, selectedValue, emptyLabel) {
+  if (!values.length) {
+    selectElement.innerHTML = `<option value="">${escapeHtml(emptyLabel)}</option>`;
     return;
   }
 
-  try {
-    const payload = await fetchJson('/api/apr-watchlist/add-run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        watchlist_name: watchlist.name,
-        run: watchlistState.selectedRun,
-      }),
+  selectElement.innerHTML = values
+    .map((value) => `
+      <option value="${escapeHtml(value)}"${value === selectedValue ? ' selected' : ''}>
+        ${escapeHtml(value)}
+      </option>
+    `)
+    .join('');
+}
+
+function getSelectablePathgroups() {
+  return buildSelectablePathgroups(watchlistState.timingPathgroups, watchlistState.timingRuns);
+}
+
+function buildSelectablePathgroups(pathgroups, runs) {
+  if (!Array.isArray(runs) || !runs.length) {
+    return [];
+  }
+
+  return [GRAPH_SEQUENTIAL_LABEL].concat(Array.isArray(pathgroups) ? pathgroups : []);
+}
+
+function getTimingRunsForSelectedBlock() {
+  if (!watchlistState.selectedBlock) {
+    return watchlistState.timingRuns.slice();
+  }
+
+  return watchlistState.timingRuns.filter((run) => run.Block === watchlistState.selectedBlock);
+}
+
+function getSelectedPathgroups() {
+  return watchlistState.selectedPathgroups.slice();
+}
+
+function setTimingNotice(message, isError) {
+  watchlistState.timingNotice = message || '';
+  watchlistState.timingNoticeIsError = Boolean(isError);
+}
+
+function destroyTimingCharts() {
+  watchlistState.activeCharts.forEach((chartInstance) => chartInstance.destroy());
+  watchlistState.activeCharts = [];
+}
+
+function buildGraphSeries(runs, pathgroup) {
+  return runs
+    .map((run, index) => buildRunSeries(run, index, pathgroup))
+    .filter((seriesItem) => hasSeriesData(seriesItem.rawWns, seriesItem.rawTns, seriesItem.rawNvp));
+}
+
+function buildRunSeries(run, index, pathgroup) {
+  let rawWns;
+  let rawTns;
+  let rawNvp;
+
+  if (pathgroup === GRAPH_SEQUENTIAL_LABEL) {
+    rawWns = getSequentialMetricSeries(run, 'WNS');
+    rawTns = getSequentialMetricSeries(run, 'TNS');
+    rawNvp = getSequentialMetricSeries(run, 'NVP');
+  } else {
+    rawWns = GRAPH_STAGE_ORDER.map((stageName) => getStageMetricValue(run, stageName, pathgroup, 'WNS'));
+    rawTns = GRAPH_STAGE_ORDER.map((stageName) => getStageMetricValue(run, stageName, pathgroup, 'TNS'));
+    rawNvp = GRAPH_STAGE_ORDER.map((stageName) => getStageMetricValue(run, stageName, pathgroup, 'NVP'));
+  }
+
+  return {
+    label: buildTimingRunLabel(run),
+    color: getGraphColor(index),
+    rawWns,
+    rawTns,
+    rawNvp,
+    plotWns: rawWns.map(absOrNull),
+    plotTns: rawTns.map(absOrNull),
+    meta: run,
+  };
+}
+
+function getStageMetricValue(run, stageName, pathgroup, metricName) {
+  const stageMetrics = (run.stage_metrics || {})[stageName] || {};
+  const metricPayload = stageMetrics[pathgroup] || {};
+  return metricPayload[metricName] == null ? null : Number(metricPayload[metricName]);
+}
+
+function getSequentialMetricSeries(run, metricName) {
+  const sequentialSetup = run.sequential_setup || {};
+  const series = sequentialSetup[metricName];
+  return Array.isArray(series) ? series.map((value) => (value == null ? null : Number(value))) : [null, null, null];
+}
+
+function hasSeriesData(rawWns, rawTns, rawNvp) {
+  return hasMetricValue(rawWns) || hasMetricValue(rawTns) || hasMetricValue(rawNvp);
+}
+
+function hasMetricValue(metricValues) {
+  return Array.isArray(metricValues) && metricValues.some((value) => value != null && value !== '');
+}
+
+function buildTimingRunLabel(run) {
+  if (run.Job && run.Milestone) {
+    return `${run.Job} / ${run.Milestone}`;
+  }
+
+  return run.Job || run.Block || run.series_key || 'APR Run';
+}
+
+function getGraphColor(index) {
+  return GRAPH_COLORS[index % GRAPH_COLORS.length];
+}
+
+function absOrNull(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? Math.abs(numericValue) : null;
+}
+
+function createTimingGraphCard(pathgroup, series) {
+  const chartLibrary = window.Chart;
+
+  if (!chartLibrary) {
+    setTimingNotice('Chart.js could not be loaded for the timing viewer.', true);
+    renderTimingNotice();
+    return;
+  }
+
+  const card = document.createElement('div');
+  const chartId = `watchlist-chart-${Math.random().toString(36).slice(2)}`;
+  const legendId = `watchlist-legend-${Math.random().toString(36).slice(2)}`;
+  const detailId = `watchlist-detail-${Math.random().toString(36).slice(2)}`;
+
+  card.className = 'watchlist-graph-card';
+  card.innerHTML = `
+    <div class="watchlist-graph-layout">
+      <div class="watchlist-chart-wrap">
+        <canvas id="${chartId}"></canvas>
+      </div>
+      <div class="watchlist-graph-side-panel">
+        <div id="${legendId}" class="watchlist-legend-boxes"></div>
+        <div id="${detailId}"></div>
+      </div>
+    </div>
+  `;
+  watchlistCardsContainer.appendChild(card);
+
+  renderGraphLegend(card.querySelector(`#${legendId}`), card.querySelector(`#${detailId}`), series);
+  renderGraphChart(card.querySelector(`#${chartId}`), pathgroup, series);
+}
+
+function renderGraphLegend(legendContainer, detailContainer, series) {
+  legendContainer.innerHTML = '';
+
+  series.forEach((seriesItem, index) => {
+    const legendItem = document.createElement('div');
+    legendItem.className = `watchlist-legend-item${index === 0 ? ' is-active' : ''}`;
+    legendItem.style.background = seriesItem.color;
+    legendItem.title = seriesItem.label;
+    legendItem.addEventListener('click', function handleLegendClick() {
+      legendContainer.querySelectorAll('.watchlist-legend-item').forEach((element) => {
+        element.classList.remove('is-active');
+      });
+      legendItem.classList.add('is-active');
+      renderRunDetails(detailContainer, seriesItem);
     });
+    legendContainer.appendChild(legendItem);
+  });
 
-    applyWatchlistPayload(payload);
-    showWatchlistMessage(payload.message || 'run added to watchlist', true);
-  } catch (error) {
-    showWatchlistMessage(error.message, false);
+  if (series[0]) {
+    renderRunDetails(detailContainer, series[0]);
   }
 }
 
-async function handleDeleteWatchlist() {
-  const watchlist = findSelectedWatchlist();
-  if (!watchlist || watchlist.is_default) {
-    return;
-  }
+function renderRunDetails(container, seriesItem) {
+  const stageRows = GRAPH_STAGE_ORDER.map((stageName, index) => `
+    <tr>
+      <td>${escapeHtml(stageName)}</td>
+      <td>${formatMetricValue(seriesItem.rawWns[index])}</td>
+      <td>${formatMetricValue(seriesItem.rawTns[index])}</td>
+      <td>${formatMetricValue(seriesItem.rawNvp[index])}</td>
+    </tr>
+  `).join('');
 
-  const shouldDelete = window.confirm(`Delete watchlist "${watchlist.name}" and all of its saved runs?`);
-  if (!shouldDelete) {
-    return;
-  }
-
-  try {
-    const payload = await fetchJson('/api/apr-watchlist/delete-watchlist', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ watchlist_name: watchlist.name }),
-    });
-
-    watchlistState.selectedWatchlistName = watchlistState.defaultWatchlist;
-    applyWatchlistPayload(payload);
-    showWatchlistMessage(payload.message || 'watchlist deleted', true);
-  } catch (error) {
-    showWatchlistMessage(error.message, false);
-  }
+  container.innerHTML = `
+    <div class="watchlist-run-title">${escapeHtml(seriesItem.label)}</div>
+    <div class="watchlist-run-subtitle">
+      Block: ${escapeHtml(seriesItem.meta.Block || '-')} &middot;
+      DFT Release: ${escapeHtml(seriesItem.meta.Dft_release || '-')}
+    </div>
+    <table class="watchlist-detail-table">
+      <thead>
+        <tr>
+          <th>Stage</th>
+          <th>WNS</th>
+          <th>TNS</th>
+          <th>NVP</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${stageRows}
+      </tbody>
+    </table>
+  `;
 }
 
-async function handleWatchlistTableClick(event) {
-  const removeButton = event.target.closest('[data-item-id]');
-  if (!removeButton) {
-    return;
-  }
+function renderGraphChart(canvas, pathgroup, series) {
+  const chartDataSets = [];
 
-  try {
-    const payload = await fetchJson('/api/apr-watchlist/delete-run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        item_id: Number(removeButton.dataset.itemId),
-      }),
+  series.forEach((seriesItem) => {
+    chartDataSets.push({
+      type: 'bar',
+      label: `${seriesItem.label} TNS`,
+      data: seriesItem.plotTns,
+      backgroundColor: seriesItem.color,
+      borderColor: seriesItem.color,
+      yAxisID: 'y1',
+      order: 2,
+      barPercentage: 0.72,
+      categoryPercentage: 0.72,
     });
 
-    applyWatchlistPayload(payload);
-    showWatchlistMessage(payload.message || 'run removed from watchlist', true);
-  } catch (error) {
-    showWatchlistMessage(error.message, false);
+    chartDataSets.push({
+      type: 'line',
+      label: `${seriesItem.label} WNS`,
+      data: seriesItem.plotWns,
+      borderColor: seriesItem.color,
+      backgroundColor: seriesItem.color,
+      yAxisID: 'y',
+      order: 1,
+      tension: 0.2,
+      fill: false,
+      pointRadius: 4,
+      pointHoverRadius: 5,
+    });
+  });
+
+  const chartInstance = new window.Chart(canvas.getContext('2d'), {
+    data: {
+      labels: GRAPH_STAGE_ORDER,
+      datasets: chartDataSets,
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {
+        mode: 'index',
+        intersect: false,
+      },
+      plugins: {
+        title: {
+          display: true,
+          text: pathgroup === GRAPH_SEQUENTIAL_LABEL ? GRAPH_SEQUENTIAL_LABEL : `Pathgroup: ${pathgroup}`,
+        },
+        legend: {
+          display: false,
+        },
+      },
+      scales: {
+        y: {
+          type: 'linear',
+          position: 'left',
+          beginAtZero: true,
+          title: {
+            display: true,
+            text: 'WNS',
+          },
+        },
+        y1: {
+          type: 'linear',
+          position: 'right',
+          beginAtZero: true,
+          grid: {
+            drawOnChartArea: false,
+          },
+          title: {
+            display: true,
+            text: 'TNS',
+          },
+        },
+      },
+    },
+  });
+
+  watchlistState.activeCharts.push(chartInstance);
+}
+
+function buildStatusPillMarkup(statusValue) {
+  const toneClass = getStatusToneClass(statusValue);
+  return `<span class="watchlist-status-pill${toneClass ? ` ${toneClass}` : ''}">${escapeHtml(statusValue || '-')}</span>`;
+}
+
+function buildPromotePillMarkup(promoteValue) {
+  const normalizedValue = String(promoteValue || '').trim().toLowerCase();
+  const toneClass = normalizedValue === 'yes' ? 'is-positive' : normalizedValue === 'no' ? 'is-negative' : '';
+  return `<span class="watchlist-promote-pill${toneClass ? ` ${toneClass}` : ''}">${escapeHtml(promoteValue || '-')}</span>`;
+}
+
+function getStatusToneClass(statusValue) {
+  const normalizedStatus = String(statusValue || '').trim().toLowerCase();
+
+  if (normalizedStatus === 'completed') {
+    return 'is-positive';
   }
+
+  if (normalizedStatus === 'await extraction') {
+    return 'is-warning';
+  }
+
+  if (normalizedStatus === 'job running' || normalizedStatus === 'extracting') {
+    return 'is-info';
+  }
+
+  if (normalizedStatus === 'job failed' || normalizedStatus === 'extraction failed') {
+    return 'is-negative';
+  }
+
+  return '';
 }
 
 function findSelectedWatchlist() {
@@ -360,6 +781,12 @@ function findSelectedWatchlist() {
 }
 
 function showWatchlistMessage(message, isSuccess) {
+  if (!message) {
+    watchlistMessage.textContent = '';
+    watchlistMessage.className = 'watchlist-message is-hidden';
+    return;
+  }
+
   watchlistMessage.textContent = message;
   watchlistMessage.className = `watchlist-message ${isSuccess ? 'is-success' : 'is-error'}`;
 }
@@ -370,6 +797,10 @@ function formatTimestamp(timestamp) {
   }
 
   return String(timestamp).replace('T', ' ').replace('Z', '');
+}
+
+function formatMetricValue(value) {
+  return value == null || value === '' ? '-' : escapeHtml(String(value));
 }
 
 function escapeHtml(value) {

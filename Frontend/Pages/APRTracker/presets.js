@@ -1,30 +1,44 @@
-(function () {
-    var KPI_COLUMNS = (window.APR_TRACKER_KPI_COLUMNS || []).slice();
+function buildAPRTrackerPresets() {
+    var kpiColumns = (window.APR_TRACKER_KPI_COLUMNS || []).slice();
 
-    window.APR_TRACKER_PRESETS = {
+    return {
         default: {
             hiddenColumns: []
         },
         trackerOnly: {
-            hiddenColumns: KPI_COLUMNS
+            hiddenColumns: kpiColumns
         },
         kpiFocus: {
             hiddenColumns: ['Dft_release', 'User', 'Created', 'Modified', 'Comments', 'Promote']
         }
     };
+}
 
-    window.applyAPRTrackerPreset = function (tableBuilder, presetName) {
-        var dt = tableBuilder.getInstance();
-        if (!dt) return;
+function applyAPRTrackerPreset(tableBuilder, presetName) {
+    var dt = tableBuilder.getInstance();
+    var preset;
+    var hiddenColumns;
+    var settings;
+    var columnCount;
+    var index;
+    var columnName;
 
-        var preset = window.APR_TRACKER_PRESETS[presetName] || window.APR_TRACKER_PRESETS.default;
-        var hiddenColumns = preset.hiddenColumns || [];
+    if (!dt) {
+        return;
+    }
 
-        dt.columns().every(function (index) {
-            var columnName = this.settings()[0].aoColumns[index].name;
-            this.visible(hiddenColumns.indexOf(columnName) === -1, false);
-        });
+    preset = window.APR_TRACKER_PRESETS[presetName] || window.APR_TRACKER_PRESETS.default;
+    hiddenColumns = preset.hiddenColumns || [];
+    settings = dt.settings()[0];
+    columnCount = settings.aoColumns.length;
 
-        dt.columns.adjust().draw(false);
-    };
-})();
+    for (index = 0; index < columnCount; index += 1) {
+        columnName = settings.aoColumns[index].name;
+        dt.column(index).visible(hiddenColumns.indexOf(columnName) === -1, false);
+    }
+
+    dt.columns.adjust().draw(false);
+}
+
+window.APR_TRACKER_PRESETS = buildAPRTrackerPresets();
+window.applyAPRTrackerPreset = applyAPRTrackerPreset;
