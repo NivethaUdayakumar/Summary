@@ -1,5 +1,5 @@
 var APR_TRACKER_DB_LOCATION = 'AppData/App.db';
-var APR_TRACKER_TABLE_NAME = 'apr-tracker';
+var APR_TRACKER_TABLE_NAME = 'APR_TRACKER';
 var APR_TRACKER_PAGE_STATE = window.APR_TRACKER_PAGE_STATE || {
     table: null
 };

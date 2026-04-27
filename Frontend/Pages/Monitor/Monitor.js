@@ -340,7 +340,7 @@ async function loadTrackerTable(project_code, template_name) {
             payload.rows || [],
             project_code,
             template_name,
-            payload.table_name || `${template_name}_Tracker`,
+            payload.table_name || `${template_name}_TRACKER`,
             payload
         );
     } catch (err) {

@@ -649,7 +649,14 @@ class MonitorService:
             limit = TRACKER_PREVIEW_ROWS
 
         db_path = self.get_project_db_path(project_code, template_name)
-        table_name = f"{template_name}_Tracker"
+        defs = None
+        table_name = f"{template_name}_TRACKER"
+
+        try:
+            _, defs = self._load_template_modules(template_name)
+            table_name = getattr(defs, "TRACKER_TABLE", table_name) or table_name
+        except Exception:
+            defs = None
 
         if not db_path.exists():
             return {
@@ -686,7 +693,8 @@ class MonitorService:
             info = cur.fetchall()
             columns = [x["name"] for x in info]
             try:
-                _, defs = self._load_template_modules(template_name)
+                if defs is None:
+                    _, defs = self._load_template_modules(template_name)
                 preferred_columns = list(getattr(defs, "TRACKER_COLUMNS", [])) + list(getattr(defs, "KPI_COLUMNS", []))
                 columns = [col for col in preferred_columns if col in columns]
             except Exception:

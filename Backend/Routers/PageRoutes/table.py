@@ -4,6 +4,11 @@ import sqlite3
 
 ROOT = Path(__file__).resolve().parents[3]
 IDENTIFIER_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_-]*$')
+APR_TABLE_RENAMES = {
+    'apr-tracker': 'APR_TRACKER',
+    'apr_watchlist': 'APR_WATCHLIST',
+    'apr_weekly': 'APR_WEEKLY',
+}
 
 def resolve_db_path(db_location: str):
     if not db_location:
@@ -11,10 +16,49 @@ def resolve_db_path(db_location: str):
     path = Path(db_location)
     return path if path.is_absolute() else (ROOT / db_location).resolve()
 
+
+def find_table_name(conn, table_name: str):
+    cursor = conn.execute(
+        'SELECT name FROM sqlite_master WHERE type = ? AND lower(name) = lower(?) LIMIT 1',
+        ('table', table_name),
+    )
+    row = cursor.fetchone()
+    return row['name'] if row else None
+
+
+def migrate_apr_table_names(conn):
+    renamed_any = False
+
+    for legacy_name, canonical_name in APR_TABLE_RENAMES.items():
+        legacy_actual_name = find_table_name(conn, legacy_name)
+        canonical_actual_name = find_table_name(conn, canonical_name)
+
+        if not legacy_actual_name:
+            continue
+
+        if canonical_actual_name and canonical_actual_name != legacy_actual_name:
+            continue
+
+        if legacy_actual_name == canonical_name:
+            continue
+
+        if legacy_actual_name.lower() == canonical_name.lower():
+            temp_name = f'__TMP_{canonical_name}__'
+            conn.execute(f'ALTER TABLE {quote_identifier(legacy_actual_name)} RENAME TO {quote_identifier(temp_name)}')
+            conn.execute(f'ALTER TABLE {quote_identifier(temp_name)} RENAME TO {quote_identifier(canonical_name)}')
+        else:
+            conn.execute(f'ALTER TABLE {quote_identifier(legacy_actual_name)} RENAME TO {quote_identifier(canonical_name)}')
+
+        renamed_any = True
+
+    if renamed_any:
+        conn.commit()
+
 def get_connection(db_location: str):
     db_path = resolve_db_path(db_location)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    migrate_apr_table_names(conn)
     return conn
 
 def is_valid_identifier(value: str):

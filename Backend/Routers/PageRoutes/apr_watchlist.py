@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -6,26 +8,24 @@ from pathlib import Path
 from Backend.Routers.PageRoutes import session as session_routes
 
 
-ROOT = Path(__file__).resolve().parents[3]
-DB_PATH = ROOT / 'AppData' / 'App.db'
-TABLE_NAME = 'apr_watchlist'
-WEEKLY_ARCHIVE_TABLE = 'apr_weekly'
+PROJECTS_BASE_DIR = Path(os.environ.get('PROJECTS_BASE_DIR', '/proj'))
+TABLE_NAME = 'APR_WATCHLIST'
+WEEKLY_ARCHIVE_TABLE = 'APR_WEEKLY'
 DEFAULT_WATCHLIST = 'APR Weekly'
 WATCHLIST_RECORD = 'watchlist'
 RUN_RECORD = 'run'
 DEFAULT_BLOCK_LIMIT = 3
 CUSTOM_BLOCK_LIMIT = 10
 RUN_ID_FIELDS = ['Job', 'Milestone', 'Block', 'Stage']
-TRACKER_TABLE = 'apr-tracker'
+TRACKER_TABLE = 'APR_TRACKER'
 TIMING_SUMMARY_TABLE = 'APR_TIMING_SUMMARY'
 TIMING_STAGE_ORDER = ('place', 'clock', 'route')
 TIMING_STAGE_LABELS = {'place': 'PLACE', 'clock': 'CLOCK', 'route': 'ROUTE'}
-TIMING_TCHECKS = ('setup', 'hold')
-TIMING_PATHGROUPS = ('all', 'crit_r2out', 'from_mem', 'leaf_icg', 'reg2reg')
-TIMING_MODE = 'FUNC'
-TIMING_CORNER = 'SS_125C'
-TIMING_VOLTAGE = '0p72v'
-TIMING_SOURCE_LABEL = f'{DB_PATH.name} / {TIMING_SUMMARY_TABLE}'
+TABLE_RENAMES = {
+    'apr_watchlist': TABLE_NAME,
+    'apr_weekly': WEEKLY_ARCHIVE_TABLE,
+    'apr-tracker': TRACKER_TABLE,
+}
 TRACKER_FIELDS = [
     'Job',
     'Milestone',
@@ -46,50 +46,91 @@ def _now_str():
     return datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
-def _session_user():
+def _safe_project_code(value):
+    return bool(re.fullmatch(r'[A-Za-z0-9_]+', str(value or '').strip()))
+
+
+def _project_db_path(project_code):
+    normalized_project_code = str(project_code or '').strip()
+    if not _safe_project_code(normalized_project_code):
+        raise ValueError('invalid project_code')
+
+    return PROJECTS_BASE_DIR / normalized_project_code / 'DashAI' / 'DashAI_APR.db'
+
+
+def _timing_source_label(db_path):
+    return f'{db_path.as_posix()} / {TIMING_SUMMARY_TABLE}'
+
+
+def _session_scope():
     if not session_routes.is_session_active():
-        return None, {'success': False, 'error': 'session inactive'}, 401
+        return None, None, {'success': False, 'error': 'session inactive'}, 401
 
     session_info = session_routes.get_session_info()
     user_id = str(session_info.get('user_id', '')).strip().lower()
     if not user_id:
-        return None, {'success': False, 'error': 'user_id missing from session'}, 401
+        return None, None, {'success': False, 'error': 'user_id missing from session'}, 401
 
-    return user_id, None, None
+    project_code = str(session_info.get('project_code', '')).strip()
+    if not project_code or project_code.lower() == 'unknown':
+        return None, None, {'success': False, 'error': 'project_code missing from session'}, 400
+    if not _safe_project_code(project_code):
+        return None, None, {'success': False, 'error': 'invalid project_code in session'}, 400
+
+    return user_id, project_code, None, None
 
 
-def _connect():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=10)
+def _connect(db_path):
+    conn = sqlite3.connect(db_path, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def _ensure_timing_summary_table(conn):
-    conn.executescript(
-        f'''
-        CREATE TABLE IF NOT EXISTS "{TIMING_SUMMARY_TABLE}" (
-            "Job" TEXT,
-            "Milestone" TEXT,
-            "Block" TEXT,
-            "Stage" TEXT,
-            "Source_mtime" INTEGER,
-            "Mode" TEXT,
-            "TCheck" TEXT,
-            "TCorner" TEXT,
-            "Voltage" TEXT,
-            "Pathgroup" TEXT,
-            "WNS" REAL,
-            "TNS" REAL,
-            "NVP" INTEGER
-        );
-        CREATE INDEX IF NOT EXISTS "idx_apr_watchlist_timing_scope"
-            ON "{TIMING_SUMMARY_TABLE}" ("Job", "Milestone", "Block", "Stage");
-        CREATE INDEX IF NOT EXISTS "idx_apr_watchlist_timing_filters"
-            ON "{TIMING_SUMMARY_TABLE}" ("TCheck", "Pathgroup", "Stage");
+def _find_table_name(conn, table_name):
+    row = conn.execute(
         '''
-    )
-    conn.commit()
+        SELECT "name"
+        FROM "sqlite_master"
+        WHERE "type" = 'table'
+          AND lower("name") = lower(?)
+        LIMIT 1
+        ''',
+        (table_name,),
+    ).fetchone()
+    return row['name'] if row else None
+
+
+def _migrate_table_name(conn, legacy_name, canonical_name):
+    legacy_actual_name = _find_table_name(conn, legacy_name)
+    canonical_actual_name = _find_table_name(conn, canonical_name)
+
+    if not legacy_actual_name:
+        return False
+
+    if canonical_actual_name and canonical_actual_name != legacy_actual_name:
+        return False
+
+    if legacy_actual_name == canonical_name:
+        return False
+
+    if legacy_actual_name.lower() == canonical_name.lower():
+        temp_name = f'__TMP_{canonical_name}__'
+        conn.execute(f'ALTER TABLE "{legacy_actual_name}" RENAME TO "{temp_name}"')
+        conn.execute(f'ALTER TABLE "{temp_name}" RENAME TO "{canonical_name}"')
+    else:
+        conn.execute(f'ALTER TABLE "{legacy_actual_name}" RENAME TO "{canonical_name}"')
+
+    return True
+
+
+def _migrate_apr_table_names(conn):
+    renamed_any = False
+
+    for legacy_name, canonical_name in TABLE_RENAMES.items():
+        renamed_any = _migrate_table_name(conn, legacy_name, canonical_name) or renamed_any
+
+    if renamed_any:
+        conn.commit()
 
 
 def _ensure_weekly_archive_table(conn):
@@ -444,6 +485,7 @@ def _rollover_default_watchlist_if_needed(conn, user_id):
 
 
 def _prepare_watchlist_state(conn, user_id):
+    _migrate_apr_table_names(conn)
     _ensure_table(conn)
     _ensure_weekly_archive_table(conn)
     _ensure_default_watchlist(conn, user_id)
@@ -538,12 +580,12 @@ def _build_state(conn, user_id):
 
 
 def get_watchlists():
-    user_id, error_payload, error_status = _session_user()
+    user_id, project_code, error_payload, error_status = _session_scope()
     if error_payload:
         return error_payload, error_status
 
     try:
-        with _connect() as conn:
+        with _connect(_project_db_path(project_code)) as conn:
             _prepare_watchlist_state(conn, user_id)
             return _build_state(conn, user_id), 200
     except sqlite3.Error as error:
@@ -551,7 +593,7 @@ def get_watchlists():
 
 
 def create_watchlist(data):
-    user_id, error_payload, error_status = _session_user()
+    user_id, project_code, error_payload, error_status = _session_scope()
     if error_payload:
         return error_payload, error_status
 
@@ -560,7 +602,7 @@ def create_watchlist(data):
         return {'success': False, 'error': 'watchlist_name is required'}, 400
 
     try:
-        with _connect() as conn:
+        with _connect(_project_db_path(project_code)) as conn:
             _prepare_watchlist_state(conn, user_id)
 
             existing_row = _get_watchlist_row(conn, user_id, watchlist_name)
@@ -593,7 +635,7 @@ def create_watchlist(data):
 
 
 def delete_watchlist(data):
-    user_id, error_payload, error_status = _session_user()
+    user_id, project_code, error_payload, error_status = _session_scope()
     if error_payload:
         return error_payload, error_status
 
@@ -602,7 +644,7 @@ def delete_watchlist(data):
         return {'success': False, 'error': 'watchlist_name is required'}, 400
 
     try:
-        with _connect() as conn:
+        with _connect(_project_db_path(project_code)) as conn:
             _prepare_watchlist_state(conn, user_id)
 
             row = _get_watchlist_row(conn, user_id, watchlist_name)
@@ -630,7 +672,7 @@ def delete_watchlist(data):
 
 
 def add_run(data):
-    user_id, error_payload, error_status = _session_user()
+    user_id, project_code, error_payload, error_status = _session_scope()
     if error_payload:
         return error_payload, error_status
 
@@ -644,7 +686,7 @@ def add_run(data):
         return {'success': False, 'error': str(error)}, 400
 
     try:
-        with _connect() as conn:
+        with _connect(_project_db_path(project_code)) as conn:
             _prepare_watchlist_state(conn, user_id)
 
             watchlist_row = _get_watchlist_row(conn, user_id, watchlist_name)
@@ -739,7 +781,7 @@ def add_run(data):
 
 
 def delete_run(data):
-    user_id, error_payload, error_status = _session_user()
+    user_id, project_code, error_payload, error_status = _session_scope()
     if error_payload:
         return error_payload, error_status
 
@@ -752,7 +794,7 @@ def delete_run(data):
         return {'success': False, 'error': 'item_id is required'}, 400
 
     try:
-        with _connect() as conn:
+        with _connect(_project_db_path(project_code)) as conn:
             _prepare_watchlist_state(conn, user_id)
 
             existing_row = conn.execute(
@@ -807,236 +849,6 @@ def _parse_int(value):
         return int(round(float(text)))
     except (TypeError, ValueError):
         return None
-
-
-def _modified_to_epoch(timestamp_text):
-    text = str(timestamp_text or '').strip()
-    if not text:
-        return int(datetime.utcnow().timestamp())
-
-    for fmt in ('%Y%m%d %H:%M:%S', '%Y-%m-%dT%H:%M:%SZ'):
-        try:
-            return int(datetime.strptime(text, fmt).timestamp())
-        except ValueError:
-            continue
-
-    return int(datetime.utcnow().timestamp())
-
-
-def _fallback_timing_metrics(row, tcheck):
-    stage_name = str(row['Stage'] or '').strip().lower()
-    status_name = str(row['Status'] or '').strip().lower()
-    promote_name = str(row['Promote'] or '').strip().lower()
-    defaults = {
-        'setup': {
-            'place': (-0.020, -2.600, 26),
-            'clock': (-0.015, -1.850, 20),
-            'route': (-0.011, -1.250, 16),
-        },
-        'hold': {
-            'place': (-0.006, -0.900, 6),
-            'clock': (-0.004, -0.650, 5),
-            'route': (-0.003, -0.420, 4),
-        },
-    }
-    status_factors = {
-        'completed': 0.72,
-        'await extraction': 1.08,
-        'extracting': 1.02,
-        'job running': 0.96,
-        'job failed': 1.55,
-        'extraction failed': 1.85,
-    }
-    base_wns, base_tns, base_nvp = defaults.get(tcheck, {}).get(stage_name, (-0.010, -1.000, 10))
-    factor = status_factors.get(status_name, 1.0)
-
-    if promote_name == 'yes':
-        factor *= 0.88
-
-    return {
-        'WNS': round(base_wns * factor, 3),
-        'TNS': round(base_tns * factor, 3),
-        'NVP': max(int(round(base_nvp * max(factor, 0.6))), 0),
-    }
-
-
-def _build_base_timing_metrics(row, tcheck):
-    prefix = 'Setup' if tcheck == 'setup' else 'Hold'
-    fallback = _fallback_timing_metrics(row, tcheck)
-    metrics = {
-        'WNS': _parse_float(row[f'{prefix}_WNS_seq']),
-        'TNS': _parse_float(row[f'{prefix}_TNS_seq']),
-        'NVP': _parse_int(row[f'{prefix}_NVP_seq']),
-    }
-
-    if all(metric is None for metric in metrics.values()):
-        return fallback
-
-    for metric_name, fallback_value in fallback.items():
-        if metrics[metric_name] is None:
-            metrics[metric_name] = fallback_value
-
-    return metrics
-
-
-def _scale_wns_for_pathgroup(base_value, pathgroup):
-    negative_scales = {
-        'all': 1.00,
-        'crit_r2out': 1.35,
-        'from_mem': 0.58,
-        'leaf_icg': 0.34,
-        'reg2reg': 0.78,
-    }
-    positive_scales = {
-        'all': 1.00,
-        'crit_r2out': 0.68,
-        'from_mem': 0.46,
-        'leaf_icg': 0.28,
-        'reg2reg': 0.56,
-    }
-
-    if base_value is None:
-        return None
-
-    if base_value < 0:
-        return round(base_value * negative_scales.get(pathgroup, 1.0), 3)
-
-    return round(base_value * positive_scales.get(pathgroup, 1.0), 3)
-
-
-def _scale_tns_for_pathgroup(base_value, pathgroup):
-    scales = {
-        'all': 1.00,
-        'crit_r2out': 0.44,
-        'from_mem': 0.22,
-        'leaf_icg': 0.13,
-        'reg2reg': 0.29,
-    }
-
-    if base_value is None:
-        return None
-
-    return round(base_value * scales.get(pathgroup, 1.0), 3)
-
-
-def _scale_nvp_for_pathgroup(base_value, pathgroup):
-    scales = {
-        'all': 1.00,
-        'crit_r2out': 0.38,
-        'from_mem': 0.17,
-        'leaf_icg': 0.10,
-        'reg2reg': 0.25,
-    }
-
-    if base_value is None:
-        return None
-
-    return max(int(round(base_value * scales.get(pathgroup, 1.0))), 0)
-
-
-def _build_timing_seed_rows_for_tracker_row(row):
-    stage_name = str(row['Stage'] or '').strip().lower()
-    if stage_name not in TIMING_STAGE_ORDER:
-        return []
-
-    source_mtime = _modified_to_epoch(row['Modified'])
-    seed_rows = []
-
-    for tcheck in TIMING_TCHECKS:
-        base_metrics = _build_base_timing_metrics(row, tcheck)
-
-        for pathgroup in TIMING_PATHGROUPS:
-            seed_rows.append((
-                row['Job'],
-                row['Milestone'],
-                row['Block'],
-                stage_name,
-                source_mtime,
-                TIMING_MODE,
-                tcheck,
-                TIMING_CORNER,
-                TIMING_VOLTAGE,
-                pathgroup,
-                _scale_wns_for_pathgroup(base_metrics['WNS'], pathgroup),
-                _scale_tns_for_pathgroup(base_metrics['TNS'], pathgroup),
-                _scale_nvp_for_pathgroup(base_metrics['NVP'], pathgroup),
-            ))
-
-    return seed_rows
-
-
-def _seed_timing_summary_from_tracker(conn, force=False):
-    _ensure_timing_summary_table(conn)
-    existing_count = conn.execute(
-        f'SELECT COUNT(*) FROM "{TIMING_SUMMARY_TABLE}"'
-    ).fetchone()[0]
-
-    if existing_count and not force:
-        return {
-            'existing_count': existing_count,
-            'inserted_count': 0,
-        }
-
-    if force:
-        conn.execute(f'DELETE FROM "{TIMING_SUMMARY_TABLE}"')
-
-    tracker_rows = conn.execute(
-        f'''
-        SELECT
-            "Job",
-            "Milestone",
-            "Block",
-            "Stage",
-            "Modified",
-            "Status",
-            "Promote",
-            "Setup_WNS_seq",
-            "Setup_TNS_seq",
-            "Setup_NVP_seq",
-            "Hold_WNS_seq",
-            "Hold_TNS_seq",
-            "Hold_NVP_seq"
-        FROM "{TRACKER_TABLE}"
-        '''
-    ).fetchall()
-
-    seed_rows = []
-    for row in tracker_rows:
-        seed_rows.extend(_build_timing_seed_rows_for_tracker_row(row))
-
-    if seed_rows:
-        conn.executemany(
-            f'''
-            INSERT INTO "{TIMING_SUMMARY_TABLE}" (
-                "Job",
-                "Milestone",
-                "Block",
-                "Stage",
-                "Source_mtime",
-                "Mode",
-                "TCheck",
-                "TCorner",
-                "Voltage",
-                "Pathgroup",
-                "WNS",
-                "TNS",
-                "NVP"
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''',
-            seed_rows,
-        )
-
-    conn.commit()
-    return {
-        'existing_count': existing_count,
-        'inserted_count': len(seed_rows),
-    }
-
-
-def seed_timing_summary(force=False):
-    with _connect() as conn:
-        _ensure_table(conn)
-        return _seed_timing_summary_from_tracker(conn, force=force)
 
 
 def _timing_series_key(job_name, milestone_name, block_name):
@@ -1262,16 +1074,16 @@ def _get_watchlist_timing_runs(conn, user_id, watchlist_name):
 
 
 def get_timing_data(data):
-    user_id, error_payload, error_status = _session_user()
+    user_id, project_code, error_payload, error_status = _session_scope()
     if error_payload:
         return error_payload, error_status
 
     requested_name = _normalize_watchlist_name((data or {}).get('watchlist_name'))
+    db_path = _project_db_path(project_code)
 
     try:
-        with _connect() as conn:
+        with _connect(db_path) as conn:
             _prepare_watchlist_state(conn, user_id)
-            _seed_timing_summary_from_tracker(conn, force=False)
 
             watchlist_row = _get_watchlist_row(conn, user_id, requested_name or DEFAULT_WATCHLIST)
             if not watchlist_row and requested_name:
@@ -1297,7 +1109,7 @@ def get_timing_data(data):
                 'success': True,
                 'user_id': user_id,
                 'watchlist_name': canonical_name,
-                'source': TIMING_SOURCE_LABEL,
+                'source': _timing_source_label(db_path),
                 'default_block': timing_payload['blocks'][0] if timing_payload['blocks'] else '',
             })
             return timing_payload, 200

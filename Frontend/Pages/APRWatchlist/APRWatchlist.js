@@ -172,7 +172,7 @@ function applyTimingPayload(payload) {
   if (!watchlistState.timingRuns.length) {
     setTimingNotice('No timing summary rows are available for this watchlist yet.', false);
   } else if (!watchlistState.timingNoticeIsError) {
-    setTimingNotice('Timing Setup Seq uses apr-tracker setup sequence fields. Pathgroup charts use APR_TIMING_SUMMARY rows only.', false);
+    setTimingNotice('Timing Setup Seq uses APR_TRACKER setup sequence fields. Pathgroup charts use APR_TIMING_SUMMARY rows only.', false);
   }
 }
 
