@@ -1,47 +1,21 @@
-For timing data, it is not “all workers writing rows at the same time.”
+It knows from the APR_TRACKER status transition, not from watching the CSV directory.
 
-The current flow is:
+When a run is Await Extraction, the monitor starts the timing subprocess in APR_Utils.py (line 293). That calls TIMING.py through timing_worker() in APR_Utils.py (line 371).
 
-A worker first builds the full timing payload in memory in TIMING.py (line 166).
-Then it sends that whole payload to the single writer with writer.submit_timing(...) in APR_Utils.py (line 404).
-The writer thread is the only thread that touches SQLite, in APR_DB_Operations.py (line 404).
-For one timing request, the writer does one stage at a time:
+After that subprocess finishes successfully, finish_completed_work() marks the in-memory state as Completed in APR_Utils.py (line 380). STATE_DONE is "Completed" in APR_Definitions.py (line 25).
 
-BEGIN IMMEDIATE starts a transaction in APR_DB_Operations.py (line 312)
-delete old rows for that Job/Milestone/Block/Stage
-bulk insert detail rows with executemany(...) in APR_DB_Operations.py (line 192)
-build and bulk insert summary rows with executemany(...) in APR_DB_Operations.py (line 302)
-commit
-So the unit of write is basically “one worker’s stage payload,” not “one row per worker interleaved with other workers.” SQLite still processes the inserted rows internally, but all of those rows are inside one transaction, and other workers do not mix their rows into that write.
+On the same monitor cycle, update_apr_tracker() submits that tracker row to the SQLite writer in APR_Utils.py (line 323).
 
-One small difference: APR tracker updates are separate small queue items. Those are upserted one record at a time and committed individually in APR_DB_Operations.py (line 74) and APR_DB_Operations.py (line 377).
+The actual trigger is in process_tracker_update() in APR_DB_Operations.py (line 465). It:
 
-So short answer: timing writes are serialized stage-by-stage through one writer thread, with bulk inserts inside a transaction.
+reads the previous DB status with get_tracker_status_record() at APR_DB_Operations.py (line 295)
+upserts the new APR_TRACKER row
+only if the new row is Completed and the previous one was not Completed, it calls sync_tracker_timing_csv() at APR_DB_Operations.py (line 452)
+sync_tracker_timing_csv() builds the expected CSV path from the run scope in APR_DB_Operations.py (line 280), checks that the CSV exists, reads it, then write_timing_stage() in APR_DB_Operations.py (line 434) does:
 
+delete old rows for that Job/Milestone/Block/Stage scope via APR_DB_Operations.py (line 318)
+insert APR_TIMING_DETAIL via APR_DB_Operations.py (line 325)
+compute and insert APR_TIMING_SUMMARY via APR_DB_Operations.py (line 419)
+So the short answer is: the DB writes timing detail/summary when the tracker row first becomes Completed, and at that moment it looks for the stage CSV and loads it.
 
-Not a DB-corruption problem, but likely a performance and memory problem.
-
-With 24 workers in the current design:
-
-SQLite is still protected because only the single writer thread writes, in APR_DB_Operations.py (line 365).
-The issue is that each worker builds the whole timing payload in memory first, in TIMING.py (line 166).
-Then each worker blocks waiting for the writer to finish submit_timing(...), in APR_DB_Operations.py (line 381) and APR_Utils.py (line 401).
-So with 24 workers:
-
-memory usage can grow roughly with the number of in-flight payloads
-parsing threads can compete heavily for CPU, disk, and gzip I/O
-the single writer becomes the bottleneck anyway, so throughput does not scale linearly
-For your current row size example (~10k detail + ~300 summary per worker), 24 workers might still run, but I would expect:
-
-much higher RAM use
-more waiting behind the writer
-worse overall efficiency than something like 4 to 8
-So the short answer is:
-
-24 workers is not unsafe for SQLite correctness
-24 workers is probably too high for this architecture
-If you want, I can change the code to support higher worker counts more safely by:
-
-chunking detail inserts
-adding backpressure on queued timing jobs
-making workers parse only and hand off smaller batches instead of one big payload
+One important caveat: there is no background scan of APR_RUNS anymore. If the CSV did not exist exactly when that first Completed tracker update happened, this path would skip it and not retry automatically. The current design assumes TIMING.py has already finished writing the CSV before the status flips to Completed.
