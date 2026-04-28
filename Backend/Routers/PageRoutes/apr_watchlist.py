@@ -81,6 +81,7 @@ def _session_scope():
 
 
 def _connect(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn

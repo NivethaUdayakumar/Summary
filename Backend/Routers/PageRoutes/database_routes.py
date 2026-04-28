@@ -3,7 +3,7 @@ import os
 import sqlite3
 
 TEMPLATE_DIR = os.path.join("AppData", "Templates")
-MAX_PREVIEW_ROWS = 100
+MAX_PREVIEW_ROWS = 10
 
 def ensure_parent_dir(file_path):
     parent = os.path.dirname(file_path)
@@ -117,10 +117,9 @@ def get_table_data(conn, table_name, limit=MAX_PREVIEW_ROWS):
     cur = conn.cursor()
     cur.execute(f"SELECT COUNT(*) AS cnt FROM {quote_identifier(table_name)}")
     total_rows = cur.fetchone()["cnt"]
-    cur.execute(f"SELECT * FROM {quote_identifier(table_name)} LIMIT ?", (limit + 1,))
-    rows = cur.fetchall()
-    has_more = len(rows) > limit
-    preview_rows = rows[:limit]
+    cur.execute(f"SELECT * FROM {quote_identifier(table_name)} LIMIT ?", (limit,))
+    preview_rows = cur.fetchall()
+    has_more = total_rows > len(preview_rows)
     return {
         "success": True,
         "rows": [dict(row) for row in preview_rows],
@@ -525,7 +524,7 @@ def handle_database_route(action, data):
 
         if action == "table_data":
             conn = connect_db(data.get("db_path", ""))
-            return get_table_data(conn, data.get("table_name", ""))
+            return get_table_data(conn, data.get("table_name", ""), data.get("limit", MAX_PREVIEW_ROWS))
 
         if action == "create_table":
             conn = connect_db(data.get("db_path", ""))
@@ -567,7 +566,7 @@ def handle_database_route(action, data):
 
         if action == "query":
             conn = connect_db(data.get("db_path", ""))
-            return run_query(conn, data.get("sql", ""))
+            return run_query(conn, data.get("sql", ""), data.get("row_limit", MAX_PREVIEW_ROWS))
 
         if action == "save_template":
             return save_template(data.get("db_path", ""), data.get("template_name", ""))

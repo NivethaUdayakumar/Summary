@@ -4,11 +4,11 @@ import os
 import pwd
 import signal
 import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import APR_DB_Operations
-import TIMING
 from APR_Definitions import (
     DEFAULT_FLOW,
     DEFAULT_MAXDEPTH,
@@ -80,22 +80,6 @@ def extract_apr_kpi(path):
         return {col: "" for col in KPI_COLUMNS}
 
 
-def get_timing_db_path(file_path, project_code, meta=None):
-    return os.path.join(
-        "/proj",
-        project_code,
-        "DashAI",
-        "DashAI_APR.db",
-    )
-
-
-def get_timing_db_mtime(file_path, project_code, meta=None):
-    return APR_DB_Operations.get_timing_stage_mtime(
-        get_timing_db_path(file_path, project_code, meta=meta),
-        meta or parse_log_args(file_path),
-    )
-
-
 def get_run_directories(basepath, mindepth=DEFAULT_MINDEPTH, maxdepth=DEFAULT_MAXDEPTH, flow=DEFAULT_FLOW, tool=DEFAULT_TOOL):
     cmd = f'find {basepath} -mindepth {mindepth} -maxdepth {maxdepth} -type d -wholename "*/{flow}/{tool}/*"'
     result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -155,7 +139,7 @@ def db_exists_for_stage(file_path):
     return os.path.exists(db_path)
 
 
-def compute_status(state, log_path, mtime, size, is_extracting, timing_db_mtime=None):
+def compute_status(state, log_path, mtime, size, is_extracting):
     now_epoch = int(time.time())
     last_seen_mtime = state.get("Last_seen_mtime")
     last_seen_size = state.get("Last_seen_size")
@@ -170,29 +154,17 @@ def compute_status(state, log_path, mtime, size, is_extracting, timing_db_mtime=
         last_change_time = now_epoch
 
     source_db_exists = db_exists_for_stage(log_path)
-    effective_extracted_mtime = last_extracted_mtime
-    if effective_extracted_mtime is None and timing_db_mtime is not None:
-        effective_extracted_mtime = timing_db_mtime
 
     if is_extracting:
         status = STATE_EXTRACTING
     elif force_extract == 1:
         status = STATE_AWAIT
-    elif timing_db_mtime is not None:
-        if effective_extracted_mtime is not None and mtime > effective_extracted_mtime:
-            if last_status == STATE_DONE:
-                rerun += 1
-            status = STATE_AWAIT
-        else:
-            status = STATE_DONE
-            if last_extracted_mtime is None and effective_extracted_mtime is not None:
-                state["Last_extracted_mtime"] = effective_extracted_mtime
     elif last_status == STATE_EXTRACT_FAILED and not file_changed:
         status = STATE_EXTRACT_FAILED
     elif source_db_exists or last_extracted_mtime is not None:
-        if effective_extracted_mtime is None:
+        if last_extracted_mtime is None:
             status = STATE_AWAIT
-        elif mtime > effective_extracted_mtime:
+        elif mtime > last_extracted_mtime:
             if last_status == STATE_DONE:
                 rerun += 1
             status = STATE_AWAIT
@@ -229,6 +201,7 @@ def build_context(project_code):
     dashai_dir = f"/proj/{project_code}/DashAI"
     state_dir = os.path.join(dashai_dir, STATE_DIR)
     log_dir = os.path.join(dashai_dir, LOG_DIR)
+    timing_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "TIMING.py")
     force_extract_file = os.path.join(state_dir, FORCE_EXTRACT_FILE_NAME)
 
     os.makedirs(log_dir, exist_ok=True)
@@ -248,6 +221,7 @@ def build_context(project_code):
         "state_by_file": {},
         "state_dirty": False,
         "state_file": os.path.join(state_dir, STATE_FILE_NAME),
+        "timing_script": timing_script,
         "worker_pool": ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="apr-worker"),
         "writer": APR_DB_Operations.SQLiteWriter(APR_DB_Operations.get_db_path(dashai_dir)).start(),
     }
@@ -297,7 +271,6 @@ def get_file_item(context, log_path):
         file_info["mtime"],
         file_info["size"],
         state_key in context["active_workers"],
-        timing_db_mtime=get_timing_db_mtime(log_path, context["project_code"], meta=log_meta),
     )
     tracker_record["Status"] = status
     tracker_record["Rerun"] = rerun_count
@@ -310,7 +283,6 @@ def get_file_item(context, log_path):
     return {
         "log_path": log_path,
         "previous_status": previous_status,
-        "source_mtime": file_info["mtime"],
         "state_changed": state_entry != saved_state,
         "state_entry": state_entry,
         "state_key": state_key,
@@ -330,11 +302,10 @@ def perform_status_action(context, file_item):
     )
     future = context["worker_pool"].submit(
         timing_worker,
-        context["writer"],
         context["project_code"],
         file_item["tracker_record"]["Stage"],
         run_dir,
-        file_item["source_mtime"],
+        context["timing_script"],
     )
     context["active_workers"][file_item["state_key"]] = future
     context["queued_extraction_count"] = max(context["queued_extraction_count"] - 1, 0)
@@ -397,11 +368,12 @@ def close_context(context):
         append_log(context, "APR monitor stopped")
 
 
-def timing_worker(writer, project_code, stage, run_dir, source_mtime):
-    payload = TIMING.build_timing_payload(project_code, stage, run_dir, source_mtime=source_mtime)
-    if payload is None:
-        return {"success": False, "result": "no reports found"}
-    writer.submit_timing(payload)
+def timing_worker(project_code, stage, run_dir, timing_script):
+    command = [sys.executable, timing_script, project_code, stage, run_dir]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or "timing extraction failed").strip()
+        return {"success": False, "result": message}
     return {"success": True, "result": "success"}
 
 

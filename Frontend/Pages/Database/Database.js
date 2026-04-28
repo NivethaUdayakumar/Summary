@@ -3,7 +3,7 @@ let currentTable = '';
 let currentSchema = [];
 let mainDataTable = null;
 let selectedRowIndexes = new Set();
-const DEFAULT_PREVIEW_ROW_LIMIT = 100;
+const DEFAULT_PREVIEW_ROW_LIMIT = 10;
 
 const listDropdown = {
     extend: 'dropdown',
@@ -253,7 +253,9 @@ async function loadTable(tableName) {
 
     const [schemaData, data] = await Promise.all([
         api(`/api/database/table_schema?db_path=${encodeURIComponent(currentDbPath)}&table_name=${encodeURIComponent(tableName)}`),
-        api(`/api/database/table_data?db_path=${encodeURIComponent(currentDbPath)}&table_name=${encodeURIComponent(tableName)}`)
+        api(
+            `/api/database/table_data?db_path=${encodeURIComponent(currentDbPath)}&table_name=${encodeURIComponent(tableName)}&limit=${DEFAULT_PREVIEW_ROW_LIMIT}`
+        )
     ]);
 
     currentSchema = schemaData.schema.columns || [];
@@ -596,7 +598,8 @@ async function runQuery() {
     setCurrentTableLabel('Query Result (running...)');
     const data = await api('/api/database/query', 'POST', {
         db_path: currentDbPath,
-        sql: sql
+        sql: sql,
+        row_limit: DEFAULT_PREVIEW_ROW_LIMIT
     });
 
     const rows = data.rows || [];

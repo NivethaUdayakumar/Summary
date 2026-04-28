@@ -197,9 +197,16 @@ function handleAPRTrackerReloadClick() {
     reloadAPRTrackerTableRows().catch(handleAPRTrackerPageError);
 }
 
+function handleAPRTrackerWatchlistManagerClick() {
+    if (typeof window.openAprWatchlistManager === 'function') {
+        window.openAprWatchlistManager();
+    }
+}
+
 function bindAPRTrackerToolbar() {
     var presetSelect = getAPRTrackerPresetSelect();
     var clearFiltersButton = document.getElementById('clearFiltersBtn');
+    var watchlistManagerButton = document.getElementById('watchlistManagerBtn');
     var reloadButton = document.getElementById('reloadTableBtn');
 
     if (presetSelect && !presetSelect._aprBound) {
@@ -210,6 +217,11 @@ function bindAPRTrackerToolbar() {
     if (clearFiltersButton && !clearFiltersButton._aprBound) {
         clearFiltersButton.addEventListener('click', handleAPRTrackerClearFiltersClick);
         clearFiltersButton._aprBound = true;
+    }
+
+    if (watchlistManagerButton && !watchlistManagerButton._aprBound) {
+        watchlistManagerButton.addEventListener('click', handleAPRTrackerWatchlistManagerClick);
+        watchlistManagerButton._aprBound = true;
     }
 
     if (reloadButton && !reloadButton._aprBound) {

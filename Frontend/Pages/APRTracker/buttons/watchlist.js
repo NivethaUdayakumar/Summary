@@ -1,14 +1,23 @@
 window.APR_BUTTONS = window.APR_BUTTONS || [];
 
-const APR_WATCHLIST_POPUP_NAME = 'apr-watchlist-manager';
-const APR_WATCHLIST_POPUP_FEATURES = 'popup=yes,width=1180,height=820,resizable=yes,scrollbars=yes';
-const APR_WATCHLIST_POPUP_URL = '/static/Pages/APRTracker/watchlistPopup.html';
+const APR_WATCHLIST_ADDER_WINDOW_NAME = 'apr-watchlist-adder';
+const APR_WATCHLIST_MANAGER_WINDOW_NAME = 'apr-watchlist-manager';
+const APR_WATCHLIST_WINDOW_FEATURES = 'popup=yes,width=1180,height=820,resizable=yes,scrollbars=yes';
+const APR_WATCHLIST_ADDER_URL = '/static/Pages/APRWatchlistAdder/APRWatchlistAdder.html';
+const APR_WATCHLIST_MANAGER_URL = '/static/Pages/APRWatchlistManager/APRWatchlistManager.html';
 const APR_WATCHLIST_ALLOWED_STAGES = ['place', 'route', 'clock'];
-
-const aprWatchlistBridgeState = {
-  activeRow: null,
-  popupWindow: null,
-};
+const APR_WATCHLIST_STORAGE_PREFIX = 'apr-watchlist-row:';
+const APR_WATCHLIST_TRACKER_FIELDS = [
+  'Job',
+  'Milestone',
+  'Block',
+  'Stage',
+  'Dft_release',
+  'User',
+  'Status',
+  'Comments',
+  'Promote',
+];
 
 function cloneAprWatchlistRow(row) {
   if (!row || typeof row !== 'object') {
@@ -25,84 +34,93 @@ function isAprWatchlistEligibleRow(row) {
   return normalizedStatus === 'completed' && APR_WATCHLIST_ALLOWED_STAGES.includes(normalizedStage);
 }
 
-function getAprWatchlistRowLabel(row) {
-  if (typeof window.getAPRTrackerRowLabel === 'function') {
-    return window.getAPRTrackerRowLabel(row || {});
+function normalizeAprWatchlistRun(row) {
+  const sourceRow = row && typeof row === 'object' ? row : {};
+  const normalizedRun = {};
+
+  APR_WATCHLIST_TRACKER_FIELDS.forEach((fieldName) => {
+    const fieldValue = sourceRow[fieldName];
+    normalizedRun[fieldName] = fieldValue == null ? '' : String(fieldValue).trim();
+  });
+
+  if (!normalizedRun.Job || !normalizedRun.Milestone || !normalizedRun.Block || !normalizedRun.Stage) {
+    throw new Error('Run must include Job, Milestone, Block, and Stage.');
   }
 
-  return [row && row.Job, row && row.Milestone, row && row.Block, row && row.Stage]
-    .filter((value) => value)
-    .join(' / ');
+  return normalizedRun;
 }
 
-function syncAprWatchlistPopupRow() {
-  const popupWindow = aprWatchlistBridgeState.popupWindow;
-
-  if (
-    !popupWindow ||
-    popupWindow.closed ||
-    typeof popupWindow.setAprWatchlistPopupActiveRow !== 'function'
-  ) {
+function canAddAprWatchlistRun(row) {
+  if (!isAprWatchlistEligibleRow(row)) {
     return false;
   }
 
-  popupWindow.setAprWatchlistPopupActiveRow(cloneAprWatchlistRow(aprWatchlistBridgeState.activeRow));
-  return true;
+  try {
+    normalizeAprWatchlistRun(row);
+    return true;
+  } catch (error) {
+    return false;
+  }
 }
 
-function ensureAprWatchlistPopupWindow() {
-  if (aprWatchlistBridgeState.popupWindow && !aprWatchlistBridgeState.popupWindow.closed) {
-    return aprWatchlistBridgeState.popupWindow;
-  }
+function buildAprWatchlistWindowUrl(baseUrl, queryParams) {
+  const url = new URL(baseUrl, window.location.origin);
 
-  aprWatchlistBridgeState.popupWindow = window.open(
-    APR_WATCHLIST_POPUP_URL,
-    APR_WATCHLIST_POPUP_NAME,
-    APR_WATCHLIST_POPUP_FEATURES
-  );
+  Object.keys(queryParams || {}).forEach((key) => {
+    if (queryParams[key]) {
+      url.searchParams.set(key, queryParams[key]);
+    }
+  });
 
-  if (!aprWatchlistBridgeState.popupWindow) {
+  return url.toString();
+}
+
+function openAprWatchlistWindow(url, windowName) {
+  const popupWindow = window.open(url, windowName, APR_WATCHLIST_WINDOW_FEATURES);
+
+  if (!popupWindow) {
     window.alert('Unable to open the APR Watchlist window. Please allow pop-ups for this site.');
     return null;
   }
 
-  return aprWatchlistBridgeState.popupWindow;
+  popupWindow.focus();
+  return popupWindow;
 }
 
-window.APR_WATCHLIST_POPUP_BRIDGE = {
-  connect(popupWindow) {
-    if (popupWindow && !popupWindow.closed) {
-      aprWatchlistBridgeState.popupWindow = popupWindow;
-    }
-  },
-  disconnect(popupWindow) {
-    if (aprWatchlistBridgeState.popupWindow === popupWindow) {
-      aprWatchlistBridgeState.popupWindow = null;
-    }
-  },
-  getActiveRow() {
-    return cloneAprWatchlistRow(aprWatchlistBridgeState.activeRow);
-  },
-  getTrackerRowLabel(row) {
-    return getAprWatchlistRowLabel(row || {});
-  },
-};
+function storeAprWatchlistRun(row) {
+  const runToken = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+  const storageKey = APR_WATCHLIST_STORAGE_PREFIX + runToken;
 
-function openAprWatchlistPopup(row) {
-  let popupWindow;
+  window.localStorage.setItem(storageKey, JSON.stringify(cloneAprWatchlistRow(row)));
+  return runToken;
+}
 
-  if (!isAprWatchlistEligibleRow(row)) {
-    return;
+function openAprWatchlistAdder(row) {
+  let runToken;
+  let url;
+
+  if (!canAddAprWatchlistRun(row)) {
+    window.alert('Only Completed PLACE, ROUTE, or CLOCK runs can be added to a watchlist.');
+    return null;
   }
 
-  aprWatchlistBridgeState.activeRow = cloneAprWatchlistRow(row);
-  popupWindow = ensureAprWatchlistPopupWindow();
-  if (!popupWindow) {
-    return;
+  try {
+    runToken = storeAprWatchlistRun(row);
+  } catch (error) {
+    window.alert('Unable to prepare the selected run for watchlist add.');
+    return null;
   }
 
-  syncAprWatchlistPopupRow();
-  popupWindow.focus();
+  url = buildAprWatchlistWindowUrl(APR_WATCHLIST_ADDER_URL, { run_token: runToken });
+  return openAprWatchlistWindow(url, APR_WATCHLIST_ADDER_WINDOW_NAME);
+}
+
+function openAprWatchlistManager() {
+  return openAprWatchlistWindow(APR_WATCHLIST_MANAGER_URL, APR_WATCHLIST_MANAGER_WINDOW_NAME);
+}
+
+function openAprWatchlistQuickAddAction(row) {
+  openAprWatchlistAdder(row);
 }
 
 function isAprWatchlistButtonDisabled(row) {
@@ -120,8 +138,11 @@ function registerAprWatchlistButton() {
     label: 'Watchlist',
     className: 'ui mini button',
     disabled: isAprWatchlistButtonDisabled,
-    handler: openAprWatchlistPopup,
+    handler: openAprWatchlistQuickAddAction,
   });
 }
+
+window.openAprWatchlistManager = openAprWatchlistManager;
+window.openAprWatchlistAdder = openAprWatchlistAdder;
 
 registerAprWatchlistButton();

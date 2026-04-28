@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 
+import csv
 import gzip
 import os
 import re
 import subprocess
 import sys
 import warnings
-
-import APR_DB_Operations
+from concurrent.futures import ThreadPoolExecutor
 
 warnings.filterwarnings("ignore")
 
@@ -46,13 +46,15 @@ def get_voltage_list(design_file):
     return voltage_list
 
 
-def parse_timing_args(filename):
-    parts = filename.strip().split("/")
+def parse_timing_args(filename, voltage_list=None):
+    normalized_path = filename.replace("\\", "/").strip()
+    parts = normalized_path.split("/")
     corners = ["WCL", "WC", "BCH", "BC", "TYP"]
     voltage = ""
 
-    design_file = "/".join(filename.strip().split("/")[:-4])
-    for voltage_name in get_voltage_list(design_file):
+    design_file = "/".join(parts[:-4])
+    voltage_candidates = voltage_list if voltage_list is not None else get_voltage_list(design_file)
+    for voltage_name in voltage_candidates:
         if voltage_name in parts[-2]:
             voltage = voltage_name
             break
@@ -84,16 +86,17 @@ def get_timing_report_paths(rundir, stage):
     grep_path = rf"(NORM|SHIFT|CAP|OCC).*{re.escape(stage)}_final_.*(tarpt\.gz)"
     command = f"find {rundir} | grep -Ei '{grep_path}' | grep -vi all"
     result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return sorted(line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip())
 
 
-def parse_report(reportpath):
+def parse_report(reportpath, parts=None):
     rows = []
-    parts = parse_timing_args(reportpath)
+    parts = parts or parse_timing_args(reportpath)
     mode = parts[5]
     tcheck = parts[6]
     tcorner = parts[7]
     voltage = parts[8]
+    had_error = False
 
     try:
         with gzip.open(reportpath, "rt", encoding="utf-8", errors="ignore") as infile:
@@ -145,64 +148,147 @@ def parse_report(reportpath):
                     pathgroup = None
                     slack = None
     except Exception as exc:
+        had_error = True
         print(f"Error parsing: {reportpath}: {exc}")
 
-    return rows
+    return rows, had_error
 
 
-def get_report_combo(reportpath):
-    parts = parse_timing_args(reportpath)
-    return tuple(parts[index] for index in (5, 6, 7, 8, 9))
+def build_report_info(reportpath, voltage_cache=None):
+    if voltage_cache is None:
+        voltage_cache = {}
+    normalized_path = reportpath.replace("\\", "/").strip()
+    design_file = "/".join(normalized_path.split("/")[:-4])
+    if design_file not in voltage_cache:
+        voltage_cache[design_file] = get_voltage_list(design_file)
+
+    parts = parse_timing_args(normalized_path, voltage_list=voltage_cache[design_file])
+    return {
+        "path": normalized_path,
+        "parts": parts,
+    }
 
 
-def get_log_mtime(rundir, stage):
-    log_path = os.path.join(rundir, "logs", f"{stage}.log")
-    try:
-        return int(os.path.getmtime(log_path))
-    except OSError:
-        return None
+def get_parse_worker_count(report_count):
+    if report_count <= 1:
+        return 1
+
+    requested_workers = os.environ.get("APR_TIMING_PARSE_WORKERS", "").strip()
+    if requested_workers:
+        try:
+            return max(1, min(report_count, int(requested_workers)))
+        except ValueError:
+            pass
+
+    cpu_count = os.cpu_count() or 1
+    return min(report_count, max(2, min(8, cpu_count)))
 
 
-def build_timing_payload(project_code, stage, rundir, source_mtime=None):
+def build_scope(parts):
+    return {
+        "Job": parts[0],
+        "Milestone": parts[2],
+        "Block": parts[3],
+        "Stage": parts[4],
+    }
+
+
+def get_timing_csv_path(project_code, scope):
+    return os.path.join(
+        "/proj",
+        project_code,
+        "DashAI",
+        "APR_RUNS",
+        scope["Block"],
+        scope["Milestone"],
+        scope["Job"],
+        f'{scope["Stage"]}.csv',
+    )
+
+
+def write_timing_csv(csv_path, timing_rows):
+    output_path = csv_path
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    temp_path = f"{output_path}.tmp"
+    with open(temp_path, "w", encoding="utf-8", newline="") as outfile:
+        writer = csv.writer(outfile)
+        writer.writerow([
+            "Mode",
+            "TCheck",
+            "TCorner",
+            "Voltage",
+            "Pathgroup",
+            "Slack",
+            "Endpoint",
+            "Startpoint",
+            "Timing",
+            "Report",
+        ])
+        writer.writerows(timing_rows)
+
+    os.replace(temp_path, output_path)
+    return output_path
+
+
+def write_timing_stage_csv(project_code, stage, rundir):
     reports = get_timing_report_paths(rundir, stage)
     if not reports:
         return None
 
-    first_parts = parse_timing_args(reports[0])
-    timing_rows = []
+    voltage_cache = {}
+    report_infos = []
     error_count = 0
-
     for report in reports:
         try:
-            timing_rows.extend(parse_report(report))
-        except Exception:
+            report_infos.append(build_report_info(report, voltage_cache=voltage_cache))
+        except Exception as exc:
+            error_count += 1
+            print(f"Error preparing report: {report}: {exc}")
+
+    if not report_infos:
+        return None
+
+    scope = build_scope(report_infos[0]["parts"])
+    timing_rows = []
+
+    worker_count = get_parse_worker_count(len(report_infos))
+    if worker_count == 1:
+        parsed_reports = [
+            parse_report(report_info["path"], parts=report_info["parts"])
+            for report_info in report_infos
+        ]
+    else:
+        report_paths = [report_info["path"] for report_info in report_infos]
+        report_parts = [report_info["parts"] for report_info in report_infos]
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="timing-report") as executor:
+            parsed_reports = list(executor.map(parse_report, report_paths, report_parts))
+
+    for rows, had_error in parsed_reports:
+        timing_rows.extend(rows)
+        if had_error:
             error_count += 1
 
+    csv_path = write_timing_csv(
+        get_timing_csv_path(project_code, scope),
+        timing_rows,
+    )
     return {
+        "csv_path": csv_path,
         "error_count": error_count,
-        "report_combos": {get_report_combo(report) for report in reports},
-        "report_count": len(reports),
-        "scope": {
-            "Job": first_parts[0],
-            "Milestone": first_parts[2],
-            "Block": first_parts[3],
-            "Stage": first_parts[4],
-        },
-        "source_mtime": source_mtime if source_mtime is not None else get_log_mtime(rundir, stage),
-        "timing_rows": timing_rows,
+        "report_count": len(report_infos),
+        "row_count": len(timing_rows),
     }
 
 
-def timing_db_per_stage(project_code, stage, rundir):
-    payload = build_timing_payload(project_code, stage, rundir)
-    if payload is None:
+def timing_csv_per_stage(project_code, stage, rundir):
+    result = write_timing_stage_csv(project_code, stage, rundir)
+    if result is None:
         print("No reports found")
         return 1
 
-    db_path = APR_DB_Operations.get_db_path(f"/proj/{project_code}/DashAI")
-    result = APR_DB_Operations.write_timing_stage_file(db_path, payload)
     print(
-        f"Processed {result['report_count']} reports into {db_path} "
+        f"Processed {result['report_count']} reports into {result['csv_path']} "
         f"with {result['row_count']} detail rows"
     )
     return 0
@@ -213,4 +299,4 @@ if __name__ == "__main__":
         print("Usage: python TIMING.py <project_code> <stage> <rundir>")
         sys.exit(1)
 
-    sys.exit(timing_db_per_stage(sys.argv[1], sys.argv[2], sys.argv[3]))
+    sys.exit(timing_csv_per_stage(sys.argv[1], sys.argv[2], sys.argv[3]))

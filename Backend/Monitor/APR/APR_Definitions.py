@@ -63,7 +63,6 @@ STATE_ENTRY_FIELDS = {
 }
 
 WRITER_TRACKER = "tracker"
-WRITER_TIMING = "timing"
 WRITER_STOP = "stop"
 
 def now_str():
