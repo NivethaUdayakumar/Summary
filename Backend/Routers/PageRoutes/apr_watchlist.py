@@ -21,11 +21,6 @@ TRACKER_TABLE = 'APR_TRACKER'
 TIMING_SUMMARY_TABLE = 'APR_TIMING_SUMMARY'
 TIMING_STAGE_ORDER = ('place', 'clock', 'route')
 TIMING_STAGE_LABELS = {'place': 'PLACE', 'clock': 'CLOCK', 'route': 'ROUTE'}
-TABLE_RENAMES = {
-    'apr_watchlist': TABLE_NAME,
-    'apr_weekly': WEEKLY_ARCHIVE_TABLE,
-    'apr-tracker': TRACKER_TABLE,
-}
 TRACKER_FIELDS = [
     'Job',
     'Milestone',
@@ -58,8 +53,20 @@ def _project_db_path(project_code):
     return PROJECTS_BASE_DIR / normalized_project_code / 'DashAI' / 'DashAI_APR.db'
 
 
-def _timing_source_label(db_path):
-    return f'{db_path.as_posix()} / {TIMING_SUMMARY_TABLE}'
+def _stage_db_root(project_code):
+    normalized_project_code = str(project_code or '').strip()
+    if not _safe_project_code(normalized_project_code):
+        raise ValueError('invalid project_code')
+
+    return PROJECTS_BASE_DIR / normalized_project_code / 'DashAI' / 'APR_RUNS'
+
+
+def _stage_db_path(project_code, block_name, milestone_name, job_name, stage_name):
+    return _stage_db_root(project_code) / str(block_name or '').strip() / str(milestone_name or '').strip() / str(job_name or '').strip() / f'{str(stage_name or "").strip()}.db'
+
+
+def _timing_source_label(project_code):
+    return f'{_stage_db_root(project_code).as_posix()} / */*/*/*.db / {TIMING_SUMMARY_TABLE}'
 
 
 def _session_scope():
@@ -99,39 +106,6 @@ def _find_table_name(conn, table_name):
         (table_name,),
     ).fetchone()
     return row['name'] if row else None
-
-
-def _migrate_table_name(conn, legacy_name, canonical_name):
-    legacy_actual_name = _find_table_name(conn, legacy_name)
-    canonical_actual_name = _find_table_name(conn, canonical_name)
-
-    if not legacy_actual_name:
-        return False
-
-    if canonical_actual_name and canonical_actual_name != legacy_actual_name:
-        return False
-
-    if legacy_actual_name == canonical_name:
-        return False
-
-    if legacy_actual_name.lower() == canonical_name.lower():
-        temp_name = f'__TMP_{canonical_name}__'
-        conn.execute(f'ALTER TABLE "{legacy_actual_name}" RENAME TO "{temp_name}"')
-        conn.execute(f'ALTER TABLE "{temp_name}" RENAME TO "{canonical_name}"')
-    else:
-        conn.execute(f'ALTER TABLE "{legacy_actual_name}" RENAME TO "{canonical_name}"')
-
-    return True
-
-
-def _migrate_apr_table_names(conn):
-    renamed_any = False
-
-    for legacy_name, canonical_name in TABLE_RENAMES.items():
-        renamed_any = _migrate_table_name(conn, legacy_name, canonical_name) or renamed_any
-
-    if renamed_any:
-        conn.commit()
 
 
 def _ensure_weekly_archive_table(conn):
@@ -486,7 +460,6 @@ def _rollover_default_watchlist_if_needed(conn, user_id):
 
 
 def _prepare_watchlist_state(conn, user_id):
-    _migrate_apr_table_names(conn)
     _ensure_table(conn)
     _ensure_weekly_archive_table(conn)
     _ensure_default_watchlist(conn, user_id)
@@ -888,10 +861,8 @@ def _build_timing_run_groups(run_rows):
                 'latest_updated_at': row['updated_at'] or row['created_at'] or '',
                 'statuses': {},
                 'watchlist_stages': [],
-                'stage_metrics': {label: {} for label in TIMING_STAGE_LABELS.values()},
-                'hold_stage_metrics': {label: {} for label in TIMING_STAGE_LABELS.values()},
                 'sequential_setup': _empty_sequential_metric_series(),
-                'sequential_hold': _empty_sequential_metric_series(),
+                'timing_summary_rows': [],
             },
         )
 
@@ -935,14 +906,21 @@ def _apply_tracker_sequential_rows(groups, tracker_rows):
 
 
 def _apply_timing_summary_rows(groups, summary_rows):
-    available_pathgroups = set()
+    available_modes = set()
+    available_tchecks = set()
+    available_tcorners = set()
+    available_voltages = set()
 
     for row in summary_rows:
         group_key = _timing_series_key(row['Job'], row['Milestone'], row['Block'])
         group = groups.get(group_key)
         stage_name = str(row['Stage'] or '').strip().lower()
         stage_label = TIMING_STAGE_LABELS.get(stage_name)
-        tcheck_name = str(row['TCheck'] or '').strip().lower()
+        mode_name = str(row['Mode'] or '').strip()
+        tcheck_value = str(row['TCheck'] or '').strip()
+        tcheck_name = tcheck_value.lower()
+        tcorner_name = str(row['TCorner'] or '').strip()
+        voltage_name = str(row['Voltage'] or '').strip()
         pathgroup_name = str(row['Pathgroup'] or '').strip()
 
         if not group or not stage_label or not pathgroup_name:
@@ -953,19 +931,32 @@ def _apply_timing_summary_rows(groups, summary_rows):
             'TNS': None if row['TNS'] is None else round(float(row['TNS']), 3),
             'NVP': None if row['NVP'] is None else int(row['NVP']),
         }
+        group['timing_summary_rows'].append({
+            'Stage': stage_name,
+            'Mode': mode_name,
+            'TCheck': tcheck_value,
+            'TCorner': tcorner_name,
+            'Voltage': voltage_name,
+            'Pathgroup': pathgroup_name,
+            **metric_payload,
+        })
+        if mode_name:
+            available_modes.add(mode_name)
+        if tcheck_value:
+            available_tchecks.add(tcheck_value)
+        if tcorner_name:
+            available_tcorners.add(tcorner_name)
+        if voltage_name:
+            available_voltages.add(voltage_name)
 
-        if tcheck_name == 'setup':
-            group['stage_metrics'][stage_label][pathgroup_name] = metric_payload
-            available_pathgroups.add(pathgroup_name)
-        elif tcheck_name == 'hold':
-            group['hold_stage_metrics'][stage_label][pathgroup_name] = metric_payload
-            if pathgroup_name == 'all':
-                stage_index = TIMING_STAGE_ORDER.index(stage_name)
-                group['sequential_hold']['WNS'][stage_index] = metric_payload['WNS']
-                group['sequential_hold']['TNS'][stage_index] = metric_payload['TNS']
-                group['sequential_hold']['NVP'][stage_index] = metric_payload['NVP']
-
-    return sorted(available_pathgroups, key=str.lower)
+    return {
+        'filters': {
+            'modes': sorted(available_modes, key=str.lower),
+            'tchecks': sorted(available_tchecks, key=str.lower),
+            'tcorners': sorted(available_tcorners, key=str.lower),
+            'voltages': sorted(available_voltages, key=str.lower),
+        },
+    }
 
 
 def _get_watchlist_tracker_setup_rows(conn, user_id, watchlist_name):
@@ -1000,35 +991,55 @@ def _get_watchlist_tracker_setup_rows(conn, user_id, watchlist_name):
     ).fetchall()
 
 
-def _get_watchlist_timing_summary_rows(conn, user_id, watchlist_name):
-    return conn.execute(
-        f'''
-        SELECT DISTINCT timing.*
-        FROM "{TIMING_SUMMARY_TABLE}" AS timing
-        JOIN (
-            SELECT DISTINCT "job", "milestone", "block", "stage"
-            FROM "{TABLE_NAME}"
-            WHERE "user_id" = ?
-              AND "record_type" = ?
-              AND lower("watchlist_name") = lower(?)
-        ) AS watchlist_runs
-          ON timing."Job" = watchlist_runs."job"
-         AND timing."Milestone" = watchlist_runs."milestone"
-         AND timing."Block" = watchlist_runs."block"
-         AND lower(timing."Stage") = lower(watchlist_runs."stage")
-        WHERE lower(timing."Stage") IN ('place', 'clock', 'route')
-          AND lower(timing."TCheck") = 'setup'
-        ORDER BY lower(timing."Block") ASC,
-                 lower(timing."Job") ASC,
-                 lower(timing."Stage") ASC,
-                 lower(timing."TCheck") ASC,
-                 lower(timing."Pathgroup") ASC
-        ''',
-        (user_id, RUN_RECORD, watchlist_name),
-    ).fetchall()
+def _load_stage_timing_summary_rows(project_code, run_row):
+    stage_name = str(run_row['stage'] or '').strip()
+    if stage_name.lower() not in TIMING_STAGE_ORDER:
+        return []
+
+    db_path = _stage_db_path(
+        project_code,
+        run_row['block'],
+        run_row['milestone'],
+        run_row['job'],
+        stage_name,
+    )
+    if not db_path.exists():
+        return []
+
+    with sqlite3.connect(db_path, timeout=10) as conn:
+        conn.row_factory = sqlite3.Row
+        table_name = _find_table_name(conn, TIMING_SUMMARY_TABLE)
+        if not table_name:
+            return []
+
+        summary_rows = conn.execute(
+            f'''
+            SELECT *
+            FROM "{table_name}"
+            ORDER BY lower("TCheck") ASC,
+                     lower("Pathgroup") ASC
+            ''',
+        ).fetchall()
+        return [
+            {
+                **dict(row),
+                'Job': run_row['job'] or '',
+                'Milestone': run_row['milestone'] or '',
+                'Block': run_row['block'] or '',
+                'Stage': stage_name,
+            }
+            for row in summary_rows
+        ]
 
 
-def _get_watchlist_timing_runs(conn, user_id, watchlist_name):
+def _get_watchlist_timing_summary_rows(project_code, run_rows):
+    summary_rows = []
+    for run_row in run_rows:
+        summary_rows.extend(_load_stage_timing_summary_rows(project_code, run_row))
+    return summary_rows
+
+
+def _get_watchlist_timing_runs(conn, user_id, project_code, watchlist_name):
     run_rows = conn.execute(
         f'''
         SELECT DISTINCT
@@ -1055,8 +1066,8 @@ def _get_watchlist_timing_runs(conn, user_id, watchlist_name):
     groups = _build_timing_run_groups(run_rows)
     tracker_rows = _get_watchlist_tracker_setup_rows(conn, user_id, watchlist_name)
     _apply_tracker_sequential_rows(groups, tracker_rows)
-    summary_rows = _get_watchlist_timing_summary_rows(conn, user_id, watchlist_name)
-    available_pathgroups = _apply_timing_summary_rows(groups, summary_rows)
+    summary_rows = _get_watchlist_timing_summary_rows(project_code, run_rows)
+    summary_state = _apply_timing_summary_rows(groups, summary_rows)
     runs = sorted(
         groups.values(),
         key=lambda group: (
@@ -1070,7 +1081,7 @@ def _get_watchlist_timing_runs(conn, user_id, watchlist_name):
     return {
         'runs': runs,
         'blocks': blocks,
-        'pathgroups': available_pathgroups,
+        'filters': summary_state['filters'],
     }
 
 
@@ -1105,12 +1116,12 @@ def get_timing_data(data):
                 watchlist_row = watchlist_rows[0] if watchlist_rows else None
 
             canonical_name = watchlist_row['watchlist_name'] if watchlist_row else DEFAULT_WATCHLIST
-            timing_payload = _get_watchlist_timing_runs(conn, user_id, canonical_name)
+            timing_payload = _get_watchlist_timing_runs(conn, user_id, project_code, canonical_name)
             timing_payload.update({
                 'success': True,
                 'user_id': user_id,
                 'watchlist_name': canonical_name,
-                'source': _timing_source_label(db_path),
+                'source': _timing_source_label(project_code),
                 'default_block': timing_payload['blocks'][0] if timing_payload['blocks'] else '',
             })
             return timing_payload, 200

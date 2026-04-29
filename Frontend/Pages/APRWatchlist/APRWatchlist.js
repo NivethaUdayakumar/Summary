@@ -22,6 +22,10 @@ const watchlistItemsBody = document.getElementById('watchlistItemsBody');
 const watchlistEmptyState = document.getElementById('watchlistEmptyState');
 const graphWatchlistSelect = document.getElementById('graphWatchlistSelect');
 const graphBlockSelect = document.getElementById('graphBlockSelect');
+const graphModeSelect = document.getElementById('graphModeSelect');
+const graphTcheckSelect = document.getElementById('graphTcheckSelect');
+const graphTcornerSelect = document.getElementById('graphTcornerSelect');
+const graphVoltageSelect = document.getElementById('graphVoltageSelect');
 const applyGraphFiltersButton = document.getElementById('applyGraphFiltersButton');
 const reloadGraphDataButton = document.getElementById('reloadGraphDataButton');
 const pathgroupCheckboxes = document.getElementById('pathgroupCheckboxes');
@@ -37,8 +41,17 @@ const watchlistState = {
   watchlists: [],
   timingRuns: [],
   timingBlocks: [],
-  timingPathgroups: [],
+  timingFilters: {
+    modes: [],
+    tchecks: [],
+    tcorners: [],
+    voltages: [],
+  },
   selectedBlock: '',
+  selectedMode: '',
+  selectedTcheck: '',
+  selectedTcorner: '',
+  selectedVoltage: '',
   selectedPathgroups: [],
   timingSource: 'unknown',
   timingNotice: '',
@@ -63,6 +76,10 @@ function bindAprWatchlistEvents() {
   watchlistList.addEventListener('click', handleWatchlistSelection);
   graphWatchlistSelect.addEventListener('change', handleGraphWatchlistChange);
   graphBlockSelect.addEventListener('change', handleGraphBlockChange);
+  graphModeSelect.addEventListener('change', handleGraphModeChange);
+  graphTcheckSelect.addEventListener('change', handleGraphTcheckChange);
+  graphTcornerSelect.addEventListener('change', handleGraphTcornerChange);
+  graphVoltageSelect.addEventListener('change', handleGraphVoltageChange);
   applyGraphFiltersButton.addEventListener('click', handleApplyGraphFilters);
   reloadGraphDataButton.addEventListener('click', handleReloadGraphData);
   pathgroupCheckboxes.addEventListener('change', handlePathgroupSelectionChange);
@@ -120,7 +137,12 @@ async function loadTimingDataForSelectedWatchlist() {
       watchlist_name: '',
       source: 'unknown',
       blocks: [],
-      pathgroups: [],
+      filters: {
+        modes: [],
+        tchecks: [],
+        tcorners: [],
+        voltages: [],
+      },
       runs: [],
       default_block: '',
     });
@@ -138,7 +160,12 @@ async function loadTimingDataForSelectedWatchlist() {
       watchlist_name: selectedWatchlist.name,
       source: 'unknown',
       blocks: [],
-      pathgroups: [],
+      filters: {
+        modes: [],
+        tchecks: [],
+        tcorners: [],
+        voltages: [],
+      },
       runs: [],
       default_block: '',
     });
@@ -149,30 +176,24 @@ async function loadTimingDataForSelectedWatchlist() {
 function applyTimingPayload(payload) {
   const nextRuns = Array.isArray(payload.runs) ? payload.runs : [];
   const nextBlocks = Array.isArray(payload.blocks) ? payload.blocks : [];
-  const nextPathgroups = Array.isArray(payload.pathgroups) ? payload.pathgroups : [];
-  const selectablePathgroups = buildSelectablePathgroups(nextPathgroups, nextRuns);
+  const nextFilters = normalizeTimingFilters(payload.filters);
 
   watchlistState.timingRuns = nextRuns;
   watchlistState.timingBlocks = nextBlocks;
-  watchlistState.timingPathgroups = nextPathgroups;
+  watchlistState.timingFilters = nextFilters;
   watchlistState.timingSource = String(payload.source || 'unknown');
 
   if (!nextBlocks.includes(watchlistState.selectedBlock)) {
     watchlistState.selectedBlock = String(payload.default_block || nextBlocks[0] || '');
   }
 
-  watchlistState.selectedPathgroups = watchlistState.selectedPathgroups.filter((pathgroup) =>
-    selectablePathgroups.includes(pathgroup)
-  );
-
-  if (!watchlistState.selectedPathgroups.length) {
-    watchlistState.selectedPathgroups = selectablePathgroups.slice();
-  }
+  syncTimingFilterSelections();
+  syncSelectedPathgroups();
 
   if (!watchlistState.timingRuns.length) {
     setTimingNotice('No timing summary rows are available for this watchlist yet.', false);
   } else if (!watchlistState.timingNoticeIsError) {
-    setTimingNotice('Timing Setup Seq uses APR_TRACKER setup sequence fields. Pathgroup charts use APR_TIMING_SUMMARY rows only.', false);
+    setTimingNotice('Pathgroup charts use per-stage APR_TIMING_SUMMARY rows filtered by mode, tcheck, tcorner, and voltage. Timing Setup Seq remains tied to APR_TRACKER setup sequence fields.', false);
   }
 }
 
@@ -220,6 +241,7 @@ function renderWatchlistList() {
 function renderTimingControls() {
   const selectedWatchlist = findSelectedWatchlist();
   const watchlistNames = watchlistState.watchlists.map((watchlist) => watchlist.name);
+  const currentFilterOptions = getCurrentTimingFilterOptions();
 
   setSelectOptions(
     graphWatchlistSelect,
@@ -235,10 +257,42 @@ function renderTimingControls() {
     'No blocks'
   );
 
+  setSelectOptions(
+    graphModeSelect,
+    currentFilterOptions.modes,
+    watchlistState.selectedMode,
+    'No modes'
+  );
+
+  setSelectOptions(
+    graphTcheckSelect,
+    currentFilterOptions.tchecks,
+    watchlistState.selectedTcheck,
+    'No tchecks'
+  );
+
+  setSelectOptions(
+    graphTcornerSelect,
+    currentFilterOptions.tcorners,
+    watchlistState.selectedTcorner,
+    'No tcorners'
+  );
+
+  setSelectOptions(
+    graphVoltageSelect,
+    currentFilterOptions.voltages,
+    watchlistState.selectedVoltage,
+    'No voltages'
+  );
+
   renderPathgroupCheckboxes();
 
   graphWatchlistSelect.disabled = !watchlistNames.length;
   graphBlockSelect.disabled = !watchlistState.timingBlocks.length;
+  graphModeSelect.disabled = !currentFilterOptions.modes.length;
+  graphTcheckSelect.disabled = !currentFilterOptions.tchecks.length;
+  graphTcornerSelect.disabled = !currentFilterOptions.tcorners.length;
+  graphVoltageSelect.disabled = !currentFilterOptions.voltages.length;
   applyGraphFiltersButton.disabled = !selectedWatchlist;
   reloadGraphDataButton.disabled = !selectedWatchlist;
 }
@@ -268,6 +322,7 @@ function renderPathgroupCheckboxes() {
 
 function renderTimingViewer() {
   const filteredRuns = getTimingRunsForSelectedBlock();
+  const filteredSummaryRows = getFilteredTimingSummaryRows(filteredRuns);
   const selectedPathgroups = getSelectedPathgroups();
   let renderedCards = 0;
 
@@ -275,7 +330,7 @@ function renderTimingViewer() {
   renderTimingNotice();
 
   watchlistSummaryChip.textContent = watchlistState.timingRuns.length
-    ? `${filteredRuns.length} runs loaded`
+    ? `${filteredRuns.length} runs loaded · ${filteredSummaryRows.length} timing rows matched`
     : 'No timing data loaded';
   watchlistSourceChip.textContent = `Source: ${watchlistState.timingSource || 'unknown'}`;
 
@@ -283,6 +338,15 @@ function renderTimingViewer() {
     watchlistCardsContainer.innerHTML = `
       <div class="watchlist-empty-state is-graph-empty">
         No timing runs match the selected watchlist and block.
+      </div>
+    `;
+    return;
+  }
+
+  if (!filteredSummaryRows.length && !shouldShowSequentialGraph()) {
+    watchlistCardsContainer.innerHTML = `
+      <div class="watchlist-empty-state is-graph-empty">
+        No timing summary rows match the selected mode, tcheck, tcorner, and voltage for this block.
       </div>
     `;
     return;
@@ -429,6 +493,41 @@ async function selectWatchlist(watchlistName) {
 
 function handleGraphBlockChange(event) {
   watchlistState.selectedBlock = event.target.value;
+  syncTimingFilterSelections();
+  syncSelectedPathgroups();
+  renderTimingControls();
+  renderTimingViewer();
+}
+
+function handleGraphModeChange(event) {
+  watchlistState.selectedMode = event.target.value;
+  syncTimingFilterSelections();
+  syncSelectedPathgroups();
+  renderTimingControls();
+  renderTimingViewer();
+}
+
+function handleGraphTcheckChange(event) {
+  watchlistState.selectedTcheck = event.target.value;
+  syncTimingFilterSelections();
+  syncSelectedPathgroups();
+  renderTimingControls();
+  renderTimingViewer();
+}
+
+function handleGraphTcornerChange(event) {
+  watchlistState.selectedTcorner = event.target.value;
+  syncTimingFilterSelections();
+  syncSelectedPathgroups();
+  renderTimingControls();
+  renderTimingViewer();
+}
+
+function handleGraphVoltageChange(event) {
+  watchlistState.selectedVoltage = event.target.value;
+  syncTimingFilterSelections();
+  syncSelectedPathgroups();
+  renderTimingControls();
   renderTimingViewer();
 }
 
@@ -467,16 +566,127 @@ function setSelectOptions(selectElement, values, selectedValue, emptyLabel) {
     .join('');
 }
 
-function getSelectablePathgroups() {
-  return buildSelectablePathgroups(watchlistState.timingPathgroups, watchlistState.timingRuns);
+function normalizeTimingFilters(filters) {
+  return {
+    modes: Array.isArray(filters && filters.modes) ? filters.modes : [],
+    tchecks: Array.isArray(filters && filters.tchecks) ? filters.tchecks : [],
+    tcorners: Array.isArray(filters && filters.tcorners) ? filters.tcorners : [],
+    voltages: Array.isArray(filters && filters.voltages) ? filters.voltages : [],
+  };
 }
 
-function buildSelectablePathgroups(pathgroups, runs) {
-  if (!Array.isArray(runs) || !runs.length) {
-    return [];
+function getCurrentTimingFilterOptions() {
+  return {
+    modes: watchlistState.timingFilters.modes.slice(),
+    tchecks: watchlistState.timingFilters.tchecks.slice(),
+    tcorners: watchlistState.timingFilters.tcorners.slice(),
+    voltages: watchlistState.timingFilters.voltages.slice(),
+  };
+}
+
+function getSelectablePathgroups() {
+  const filteredRows = getFilteredTimingSummaryRows(getTimingRunsForSelectedBlock());
+  const pathgroups = getUniqueTimingValues(filteredRows, 'Pathgroup');
+
+  return shouldShowSequentialGraph()
+    ? [GRAPH_SEQUENTIAL_LABEL].concat(pathgroups)
+    : pathgroups;
+}
+
+function syncTimingFilterSelections() {
+  const runs = getTimingRunsForSelectedBlock();
+  const summaryRows = collectTimingSummaryRows(runs);
+
+  const modeOptions = getUniqueTimingValues(summaryRows, 'Mode');
+  watchlistState.selectedMode = coerceSelectedValue(watchlistState.selectedMode, modeOptions);
+
+  const modeRows = filterTimingRowsByField(summaryRows, 'Mode', watchlistState.selectedMode);
+  const tcheckOptions = getUniqueTimingValues(modeRows, 'TCheck');
+  watchlistState.selectedTcheck = coerceSelectedValue(watchlistState.selectedTcheck, tcheckOptions);
+
+  const tcheckRows = filterTimingRowsByField(modeRows, 'TCheck', watchlistState.selectedTcheck);
+  const tcornerOptions = getUniqueTimingValues(tcheckRows, 'TCorner');
+  watchlistState.selectedTcorner = coerceSelectedValue(watchlistState.selectedTcorner, tcornerOptions);
+
+  const tcornerRows = filterTimingRowsByField(tcheckRows, 'TCorner', watchlistState.selectedTcorner);
+  const voltageOptions = getUniqueTimingValues(tcornerRows, 'Voltage');
+  watchlistState.selectedVoltage = coerceSelectedValue(watchlistState.selectedVoltage, voltageOptions);
+
+  watchlistState.timingFilters = {
+    modes: modeOptions,
+    tchecks: tcheckOptions,
+    tcorners: tcornerOptions,
+    voltages: voltageOptions,
+  };
+}
+
+function syncSelectedPathgroups() {
+  const selectablePathgroups = getSelectablePathgroups();
+  watchlistState.selectedPathgroups = watchlistState.selectedPathgroups.filter((pathgroup) =>
+    selectablePathgroups.includes(pathgroup)
+  );
+
+  if (!watchlistState.selectedPathgroups.length) {
+    watchlistState.selectedPathgroups = selectablePathgroups.slice();
+  }
+}
+
+function collectTimingSummaryRows(runs) {
+  return (Array.isArray(runs) ? runs : []).flatMap((run) =>
+    Array.isArray(run.timing_summary_rows) ? run.timing_summary_rows : []
+  );
+}
+
+function filterTimingRowsByField(rows, fieldName, expectedValue) {
+  const normalizedExpectedValue = normalizeTimingValue(expectedValue);
+  if (!normalizedExpectedValue) {
+    return rows.slice();
   }
 
-  return [GRAPH_SEQUENTIAL_LABEL].concat(Array.isArray(pathgroups) ? pathgroups : []);
+  return rows.filter((row) => normalizeTimingValue(row[fieldName]) === normalizedExpectedValue);
+}
+
+function getFilteredTimingSummaryRows(runs) {
+  let rows = collectTimingSummaryRows(runs);
+  rows = filterTimingRowsByField(rows, 'Mode', watchlistState.selectedMode);
+  rows = filterTimingRowsByField(rows, 'TCheck', watchlistState.selectedTcheck);
+  rows = filterTimingRowsByField(rows, 'TCorner', watchlistState.selectedTcorner);
+  rows = filterTimingRowsByField(rows, 'Voltage', watchlistState.selectedVoltage);
+  return rows;
+}
+
+function getUniqueTimingValues(rows, fieldName) {
+  const uniqueValues = new Map();
+
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const rawValue = String((row && row[fieldName]) || '').trim();
+    const normalizedValue = normalizeTimingValue(rawValue);
+    if (!normalizedValue || uniqueValues.has(normalizedValue)) {
+      return;
+    }
+
+    uniqueValues.set(normalizedValue, rawValue);
+  });
+
+  return Array.from(uniqueValues.values()).sort((leftValue, rightValue) =>
+    leftValue.localeCompare(rightValue, undefined, { sensitivity: 'base' })
+  );
+}
+
+function coerceSelectedValue(currentValue, availableValues) {
+  const normalizedCurrentValue = normalizeTimingValue(currentValue);
+  const nextValue = (Array.isArray(availableValues) ? availableValues : []).find(
+    (value) => normalizeTimingValue(value) === normalizedCurrentValue
+  );
+  return nextValue || (availableValues[0] || '');
+}
+
+function normalizeTimingValue(value) {
+  return String(value == null ? '' : value).trim().toLowerCase();
+}
+
+function shouldShowSequentialGraph() {
+  return normalizeTimingValue(watchlistState.selectedTcheck) === 'setup';
 }
 
 function getTimingRunsForSelectedBlock() {
@@ -535,9 +745,21 @@ function buildRunSeries(run, index, pathgroup) {
 }
 
 function getStageMetricValue(run, stageName, pathgroup, metricName) {
-  const stageMetrics = (run.stage_metrics || {})[stageName] || {};
-  const metricPayload = stageMetrics[pathgroup] || {};
+  const metricPayload = getTimingSummaryMetricPayload(run, stageName, pathgroup);
   return metricPayload[metricName] == null ? null : Number(metricPayload[metricName]);
+}
+
+function getTimingSummaryMetricPayload(run, stageName, pathgroup) {
+  const matchingRow = (Array.isArray(run.timing_summary_rows) ? run.timing_summary_rows : []).find((row) =>
+    normalizeTimingValue(row.Stage) === normalizeTimingValue(stageName) &&
+    normalizeTimingValue(row.Pathgroup) === normalizeTimingValue(pathgroup) &&
+    normalizeTimingValue(row.Mode) === normalizeTimingValue(watchlistState.selectedMode) &&
+    normalizeTimingValue(row.TCheck) === normalizeTimingValue(watchlistState.selectedTcheck) &&
+    normalizeTimingValue(row.TCorner) === normalizeTimingValue(watchlistState.selectedTcorner) &&
+    normalizeTimingValue(row.Voltage) === normalizeTimingValue(watchlistState.selectedVoltage)
+  );
+
+  return matchingRow || {};
 }
 
 function getSequentialMetricSeries(run, metricName) {

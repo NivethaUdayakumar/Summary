@@ -317,6 +317,16 @@ body {
   font-size: 1rem;
 }
 
+.watchlist-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.watchlist-field-group {
+  min-width: 0;
+}
+
 .watchlist-button-row {
   display: flex;
   gap: 0.65rem;
@@ -546,5 +556,9 @@ body {
   .watchlist-graph-toolbar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .watchlist-filter-grid {
+    grid-template-columns: 1fr;
   }
 }

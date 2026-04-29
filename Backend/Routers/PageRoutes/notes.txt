@@ -1,0 +1,20 @@
+The APR Watchlist page is basically a read-only dashboard over two data sources: saved watchlist metadata in DashAI_APR.db, and per-run timing summaries in the stage DB files under APR_RUNS.
+
+The page shell is defined in APRWatchlist.html (line 28). It has a filter panel for Watchlist, Block, Mode, TCheck, TCorner, and Voltage at APRWatchlist.html (line 55), a pathgroup checkbox area at APRWatchlist.html (line 93), and the graph card container at APRWatchlist.html (line 104).
+
+On load, the frontend boots from initializeAprWatchlistPage() (line 64), then runs reloadAprWatchlistPageData() (line 104). It makes two fetches:
+/api/apr-watchlist for the saved watchlists, then /api/apr-watchlist/timing-data for timing graph data for the selected watchlist, via loadTimingDataForSelectedWatchlist() (line 132).
+
+The backend watchlist metadata comes from get_watchlists() (line 556). That route is session-scoped by user and project via _session_scope() (line 72), uses APR_WATCHLIST and APR_WEEKLY in apr_watchlist.py (line 12), ensures the default weekly watchlist exists and rolls over by week in _prepare_watchlist_state() (line 462), then returns the sidebar/watchlist table payload from _build_state() (line 469).
+
+The timing graph payload comes from get_timing_data() (line 1088). It loads the selected runs from the watchlist in _get_watchlist_timing_runs() (line 1042), pulls sequential setup values from APR_TRACKER through _get_watchlist_tracker_setup_rows() (line 962), and reads each run’s APR_TIMING_SUMMARY rows from its stage DB with _load_stage_timing_summary_rows() (line 994). The route groups those rows per run in timing_summary_rows inside _build_timing_run_groups() (line 844) and _apply_timing_summary_rows() (line 908).
+
+After the payload arrives, the page mostly filters client-side. applyTimingPayload() (line 176) stores the runs and filter options. renderTimingControls() (line 241) fills the selects. syncTimingFilterSelections() (line 596) recomputes valid Mode/TCheck/TCorner/Voltage choices for the selected block, and getFilteredTimingSummaryRows() (line 649) narrows the raw summary rows in memory. The pathgroup checkbox list is derived from those filtered rows, so it only shows graphs that actually exist for the current selection.
+
+The actual charts are rendered in renderTimingViewer() (line 323). Each checked pathgroup becomes one graph card. buildGraphSeries() (line 714) and buildRunSeries() (line 720) create one series per run across PLACE, CLOCK, and ROUTE. For normal pathgroup graphs, getTimingSummaryMetricPayload() (line 752) picks the exact summary row matching the selected Mode, TCheck, TCorner, Voltage, stage, and pathgroup. The special Timing Setup Seq graph uses the sequential values from APR_TRACKER, not APR_TIMING_SUMMARY.
+
+The timing data itself is produced by the APR monitor flow. The monitor launches TIMING.py from timing_worker() (line 371), marks extraction completion in finish_completed_work() (line 380), updates APR_TRACKER in update_apr_tracker() (line 323), and TIMING.py writes the per-stage timing DB schema and rows in ensure_timing_schema() (line 278) and write_timing_stage_db() (line 395). Table names come from APR_Definitions.py (line 28).
+
+One important detail: this page’s JS only reads and visualizes. Watchlist CRUD exists on the backend in create_watchlist() (line 569), add_run() (line 648), and delete_run() (line 757), but the APR Watchlist page itself does not call those directly.
+
+If you want, I can also walk through one concrete user action end-to-end, like “change block -> recompute filter options -> rebuild pathgroup checkbox list -> redraw graphs.”

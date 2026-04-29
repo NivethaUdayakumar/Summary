@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 
-import csv
 import gzip
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import warnings
 from concurrent.futures import ThreadPoolExecutor
+
+from APR_Definitions import (
+    SQLITE_BUSY_TIMEOUT_MS,
+    SQLITE_TIMEOUT_SECONDS,
+    TIMING_DETAIL_TABLE,
+    TIMING_SUMMARY_COLUMNS,
+    TIMING_SUMMARY_TABLE,
+)
 
 warnings.filterwarnings("ignore")
 
@@ -173,15 +181,7 @@ def get_parse_worker_count(report_count):
     if report_count <= 1:
         return 1
 
-    requested_workers = os.environ.get("APR_TIMING_PARSE_WORKERS", "").strip()
-    if requested_workers:
-        try:
-            return max(1, min(report_count, int(requested_workers)))
-        except ValueError:
-            pass
-
-    cpu_count = os.cpu_count() or 1
-    return min(report_count, max(2, min(8, cpu_count)))
+    return max(1, os.cpu_count() or 1)
 
 
 def build_scope(parts):
@@ -193,7 +193,7 @@ def build_scope(parts):
     }
 
 
-def get_timing_csv_path(project_code, scope):
+def get_timing_db_path(project_code, scope):
     return os.path.join(
         "/proj",
         project_code,
@@ -202,39 +202,200 @@ def get_timing_csv_path(project_code, scope):
         scope["Block"],
         scope["Milestone"],
         scope["Job"],
-        f'{scope["Stage"]}.csv',
+        f'{scope["Stage"]}.db',
     )
 
 
-def write_timing_csv(csv_path, timing_rows):
-    output_path = csv_path
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-    temp_path = f"{output_path}.tmp"
-    with open(temp_path, "w", encoding="utf-8", newline="") as outfile:
-        writer = csv.writer(outfile)
-        writer.writerow([
-            "Mode",
-            "TCheck",
-            "TCorner",
-            "Voltage",
-            "Pathgroup",
-            "Slack",
-            "Endpoint",
-            "Startpoint",
-            "Timing",
-            "Report",
-        ])
-        writer.writerows(timing_rows)
-
-    os.replace(temp_path, output_path)
-    return output_path
+def connect_db_file(db_file):
+    os.makedirs(os.path.dirname(os.path.abspath(db_file)), exist_ok=True)
+    conn = sqlite3.connect(db_file, timeout=SQLITE_TIMEOUT_SECONDS)
+    conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=FULL")
+    return conn
 
 
-def write_timing_stage_csv(project_code, stage, rundir):
+def ensure_columns(conn, table_name, column_defs):
+    existing = {row["name"] for row in conn.execute(f'PRAGMA table_info("{table_name}")').fetchall()}
+    for column_name, column_type in column_defs:
+        if column_name not in existing:
+            conn.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {column_type}')
+
+
+def ensure_timing_tables(conn):
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS {TIMING_SUMMARY_TABLE} (
+            Mode TEXT,
+            TCheck TEXT,
+            TCorner TEXT,
+            Voltage TEXT,
+            Pathgroup TEXT,
+            WNS REAL,
+            TNS REAL,
+            NVP INTEGER
+        )
+    """)
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS {TIMING_DETAIL_TABLE} (
+            Mode TEXT,
+            TCheck TEXT,
+            TCorner TEXT,
+            Voltage TEXT,
+            Pathgroup TEXT,
+            Slack REAL,
+            Endpoint TEXT,
+            Startpoint TEXT,
+            Timing TEXT,
+            Report TEXT
+        )
+    """)
+
+    ensure_columns(conn, TIMING_SUMMARY_TABLE, [
+        ("Mode", "TEXT"),
+        ("TCheck", "TEXT"),
+        ("TCorner", "TEXT"),
+        ("Voltage", "TEXT"),
+        ("Pathgroup", "TEXT"),
+        ("WNS", "REAL"),
+        ("TNS", "REAL"),
+        ("NVP", "INTEGER"),
+    ])
+    ensure_columns(conn, TIMING_DETAIL_TABLE, [
+        ("Mode", "TEXT"),
+        ("TCheck", "TEXT"),
+        ("TCorner", "TEXT"),
+        ("Voltage", "TEXT"),
+        ("Pathgroup", "TEXT"),
+        ("Slack", "REAL"),
+        ("Endpoint", "TEXT"),
+        ("Startpoint", "TEXT"),
+        ("Timing", "TEXT"),
+        ("Report", "TEXT"),
+    ])
+
+
+def ensure_timing_schema(conn):
+    ensure_timing_tables(conn)
+
+
+def delete_timing_stage_rows(conn):
+    conn.execute(f'DELETE FROM {TIMING_DETAIL_TABLE}')
+    conn.execute(f'DELETE FROM {TIMING_SUMMARY_TABLE}')
+
+
+def insert_timing_detail(conn, timing_data):
+    timing_rows = timing_data.get("timing_rows", [])
+    if not timing_rows:
+        return
+
+    conn.executemany(f"""
+        INSERT INTO {TIMING_DETAIL_TABLE} (
+            "Mode", "TCheck", "TCorner", "Voltage", "Pathgroup",
+            "Slack", "Endpoint", "Startpoint", "Timing", "Report"
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, timing_rows)
+
+
+def get_summary_options(report_combos):
+    options = {}
+    for index, column in enumerate(TIMING_SUMMARY_COLUMNS):
+        values = sorted({combo[index] for combo in report_combos if combo[index] is not None})
+        if column != "TCheck" and values:
+            values.append("all")
+        options[column] = values
+    return options
+
+
+def build_timing_summary_rows(timing_data):
+    report_combos = {tuple(combo) for combo in timing_data.get("report_combos", set())}
+    options = get_summary_options(report_combos)
+    if not all(options.get(column) for column in TIMING_SUMMARY_COLUMNS):
+        return []
+
+    combos = [[]]
+    for column in TIMING_SUMMARY_COLUMNS:
+        next_combos = []
+        for combo in combos:
+            for value in options[column]:
+                next_combos.append(combo + [value])
+        combos = next_combos
+
+    violated_rows = [row for row in timing_data.get("timing_rows", []) if row[8] == "VIOLATED"]
+    summary_rows = []
+    for combo in combos:
+        combo_key = tuple(combo)
+        if "all" not in combo_key and combo_key not in report_combos:
+            continue
+
+        filters = dict(zip(TIMING_SUMMARY_COLUMNS, combo))
+        endpoint_slacks = {}
+        for row in violated_rows:
+            row_values = {
+                "Mode": row[0],
+                "TCheck": row[1],
+                "TCorner": row[2],
+                "Voltage": row[3],
+                "Pathgroup": row[4],
+            }
+            if any(filters[column] != "all" and row_values[column] != filters[column] for column in TIMING_SUMMARY_COLUMNS):
+                continue
+
+            endpoint = row[6]
+            slack = row[5]
+            previous_slack = endpoint_slacks.get(endpoint)
+            if previous_slack is None or slack < previous_slack:
+                endpoint_slacks[endpoint] = slack
+
+        if endpoint_slacks:
+            slack_values = list(endpoint_slacks.values())
+            wns = round(min(slack_values), 3)
+            tns = round(sum(slack_values), 3)
+            nvp = len(slack_values)
+            if wns == 0.0:
+                tns = 0.0
+        else:
+            wns, tns, nvp = 0.0, 0.0, 0
+
+        summary_rows.append((
+            filters["Mode"],
+            filters["TCheck"],
+            filters["TCorner"],
+            filters["Voltage"],
+            filters["Pathgroup"],
+            wns,
+            tns,
+            nvp,
+        ))
+
+    return summary_rows
+
+
+def insert_timing_summary(conn, timing_data):
+    summary_rows = build_timing_summary_rows(timing_data)
+    if not summary_rows:
+        return
+
+    conn.executemany(f"""
+        INSERT INTO {TIMING_SUMMARY_TABLE} (
+            "Mode", "TCheck", "TCorner", "Voltage", "Pathgroup",
+            "WNS", "TNS", "NVP"
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, summary_rows)
+
+
+def write_timing_stage(conn, timing_data):
+    delete_timing_stage_rows(conn)
+    insert_timing_detail(conn, timing_data)
+    insert_timing_summary(conn, timing_data)
+
+
+def write_timing_stage_db(project_code, stage, rundir):
     reports = get_timing_report_paths(rundir, stage)
     if not reports:
-        return None
+        raise FileNotFoundError(f"No timing reports found for stage '{stage}' in '{rundir}'")
 
     voltage_cache = {}
     report_infos = []
@@ -247,7 +408,7 @@ def write_timing_stage_csv(project_code, stage, rundir):
             print(f"Error preparing report: {report}: {exc}")
 
     if not report_infos:
-        return None
+        raise RuntimeError(f"Unable to prepare timing reports for stage '{stage}' in '{rundir}'")
 
     scope = build_scope(report_infos[0]["parts"])
     timing_rows = []
@@ -269,28 +430,38 @@ def write_timing_stage_csv(project_code, stage, rundir):
         if had_error:
             error_count += 1
 
-    csv_path = write_timing_csv(
-        get_timing_csv_path(project_code, scope),
-        timing_rows,
-    )
-    return {
-        "csv_path": csv_path,
+    timing_data = {
         "error_count": error_count,
         "report_count": len(report_infos),
-        "row_count": len(timing_rows),
+        "timing_rows": timing_rows,
+        "report_combos": {
+            tuple(row[:5])
+            for row in timing_rows
+            if all(str(value or "").strip() for value in row[:5])
+        },
     }
 
+    db_path = get_timing_db_path(project_code, scope)
+    conn = connect_db_file(db_path)
+    try:
+        ensure_timing_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            write_timing_stage(conn, timing_data)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    finally:
+        conn.close()
 
-def timing_csv_per_stage(project_code, stage, rundir):
-    result = write_timing_stage_csv(project_code, stage, rundir)
-    if result is None:
-        print("No reports found")
+
+def timing_db_per_stage(project_code, stage, rundir):
+    try:
+        write_timing_stage_db(project_code, stage, rundir)
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
         return 1
-
-    print(
-        f"Processed {result['report_count']} reports into {result['csv_path']} "
-        f"with {result['row_count']} detail rows"
-    )
     return 0
 
 
@@ -299,4 +470,4 @@ if __name__ == "__main__":
         print("Usage: python TIMING.py <project_code> <stage> <rundir>")
         sys.exit(1)
 
-    sys.exit(timing_csv_per_stage(sys.argv[1], sys.argv[2], sys.argv[3]))
+    sys.exit(timing_db_per_stage(sys.argv[1], sys.argv[2], sys.argv[3]))
