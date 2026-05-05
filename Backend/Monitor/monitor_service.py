@@ -504,6 +504,30 @@ class MonitorService:
             "status": "terminated"
         }
 
+    def delete_monitor(self, monitor_name: str):
+        conn = self._connect_registry()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM monitor_registry WHERE monitor_name = ?", (monitor_name,))
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            raise FileNotFoundError("Monitor not found")
+
+        pid = row["pid"]
+        if pid and self._is_pid_alive(pid):
+            conn.close()
+            raise ValueError("Monitor is running. Terminate it before deleting.")
+
+        cur.execute("DELETE FROM monitor_registry WHERE monitor_name = ?", (monitor_name,))
+        conn.commit()
+        conn.close()
+        self._process_cache.pop(pid, None)
+
+        return {
+            "monitor_name": monitor_name,
+            "status": "deleted"
+        }
+
     def _get_latest_log(self, project_code: str, template_name: str):
         log_dir = self.get_project_log_dir(project_code, template_name)
         if not log_dir.exists():

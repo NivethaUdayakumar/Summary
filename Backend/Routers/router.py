@@ -8,7 +8,6 @@ from Backend.Routers.PageRoutes import (
     session as session_routes,
     table,
 )
-from Backend.Routers.PageRoutes.monitor import monitor_bp
     
 def register_routes(app):
 
@@ -167,7 +166,3 @@ def register_routes(app):
 
         return jsonify(handle_database_route(action, data))
     
-    # ============================
-    # REGISTER BLUEPRINTS MONITOR
-    # ============================
-    app.register_blueprint(monitor_bp)

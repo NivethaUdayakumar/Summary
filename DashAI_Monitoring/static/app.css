@@ -1,0 +1,316 @@
+:root {
+    --bg-top: #f5efe2;
+    --bg-bottom: #dce7ef;
+    --panel: rgba(255, 255, 255, 0.88);
+    --panel-border: rgba(29, 56, 83, 0.12);
+    --text-main: #17324a;
+    --text-soft: #5b7082;
+    --primary: #0f7a6c;
+    --primary-dark: #0b5e53;
+    --accent: #c96d32;
+    --danger: #b64545;
+    --danger-dark: #913636;
+    --shadow: 0 24px 60px rgba(27, 46, 67, 0.14);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: "Trebuchet MS", "Lucida Sans Unicode", sans-serif;
+    color: var(--text-main);
+    background:
+        radial-gradient(circle at top left, rgba(201, 109, 50, 0.18), transparent 30%),
+        radial-gradient(circle at top right, rgba(15, 122, 108, 0.14), transparent 26%),
+        linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+}
+
+.page_shell {
+    width: min(1320px, calc(100% - 32px));
+    margin: 28px auto;
+    display: grid;
+    gap: 18px;
+}
+
+.hero_card,
+.panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 22px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(12px);
+}
+
+.hero_card {
+    padding: 24px 28px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 18px;
+}
+
+.eyebrow {
+    margin: 0 0 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-size: 11px;
+    color: var(--accent);
+    font-weight: 700;
+}
+
+.hero_card h1,
+.panel_header h2 {
+    margin: 0;
+    font-family: Georgia, "Times New Roman", serif;
+}
+
+.hero_card h1 {
+    font-size: clamp(2rem, 4vw, 3rem);
+    line-height: 1;
+}
+
+.hero_copy,
+.panel_header p,
+.field span,
+.empty_row,
+.log_text,
+.message_box {
+    color: var(--text-soft);
+}
+
+.hero_copy {
+    margin: 10px 0 0;
+    max-width: 760px;
+    line-height: 1.6;
+}
+
+.panel {
+    padding: 22px 24px;
+}
+
+.panel_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: end;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.panel_header p {
+    margin: 6px 0 0;
+}
+
+.create_form {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    align-items: end;
+}
+
+.field {
+    display: grid;
+    gap: 8px;
+}
+
+.field span {
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.field select {
+    width: 100%;
+    border: 1px solid rgba(23, 50, 74, 0.16);
+    border-radius: 14px;
+    padding: 12px 14px;
+    font: inherit;
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.92);
+}
+
+.inline_field {
+    min-width: 220px;
+}
+
+.action_button {
+    border: 0;
+    border-radius: 999px;
+    padding: 12px 18px;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.18s ease, opacity 0.18s ease, background 0.18s ease;
+}
+
+.action_button:hover {
+    transform: translateY(-1px);
+}
+
+.action_button:disabled {
+    cursor: default;
+    opacity: 0.55;
+    transform: none;
+}
+
+.action_button.primary {
+    background: var(--primary);
+    color: #fff;
+}
+
+.action_button.primary:hover {
+    background: var(--primary-dark);
+}
+
+.action_button.secondary {
+    background: rgba(23, 50, 74, 0.08);
+    color: var(--text-main);
+}
+
+.action_button.secondary:hover {
+    background: rgba(23, 50, 74, 0.14);
+}
+
+.action_button.danger {
+    background: var(--danger);
+    color: #fff;
+}
+
+.action_button.danger:hover {
+    background: var(--danger-dark);
+}
+
+.table_wrap {
+    overflow-x: auto;
+}
+
+.status_table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 1080px;
+}
+
+.status_table th,
+.status_table td {
+    padding: 13px 12px;
+    text-align: left;
+    border-bottom: 1px solid rgba(23, 50, 74, 0.08);
+    vertical-align: top;
+}
+
+.status_table th {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-soft);
+}
+
+.status_table tbody tr {
+    transition: background 0.18s ease;
+}
+
+.status_table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.55);
+}
+
+.status_badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.status_running {
+    background: rgba(15, 122, 108, 0.14);
+    color: var(--primary-dark);
+}
+
+.status_created,
+.status_stopped {
+    background: rgba(23, 50, 74, 0.08);
+    color: var(--text-main);
+}
+
+.status_stopping,
+.status_terminating {
+    background: rgba(201, 109, 50, 0.16);
+    color: #8b471d;
+}
+
+.status_terminated {
+    background: rgba(182, 69, 69, 0.14);
+    color: var(--danger-dark);
+}
+
+.monitor_actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.monitor_actions .action_button {
+    padding: 9px 14px;
+    font-size: 13px;
+}
+
+.empty_row {
+    text-align: center;
+    padding: 32px 12px;
+}
+
+.log_text {
+    max-width: 280px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: inline-block;
+}
+
+.message_box {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    padding: 14px 18px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid rgba(23, 50, 74, 0.12);
+    box-shadow: var(--shadow);
+    min-width: 260px;
+    max-width: 420px;
+}
+
+.message_box.success {
+    color: var(--primary-dark);
+    border-color: rgba(15, 122, 108, 0.22);
+}
+
+.message_box.error {
+    color: var(--danger-dark);
+    border-color: rgba(182, 69, 69, 0.24);
+}
+
+.hidden {
+    display: none;
+}
+
+@media (max-width: 920px) {
+    .hero_card,
+    .panel_header {
+        align-items: start;
+        flex-direction: column;
+    }
+
+    .create_form {
+        grid-template-columns: 1fr;
+    }
+
+    .inline_field {
+        min-width: 100%;
+        width: 100%;
+    }
+}

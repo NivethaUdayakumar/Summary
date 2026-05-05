@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DashAI Monitoring</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+    <main class="page_shell">
+        <section class="hero_card">
+            <div>
+                <p class="eyebrow">Standalone Monitor Control</p>
+                <h1>DashAI Monitoring</h1>
+                <p class="hero_copy">
+                    Create monitors, start them, terminate them, delete stopped entries, and watch live status from one small Flask app on port {{ port }}.
+                </p>
+            </div>
+            <button id="refresh_btn" class="action_button secondary" type="button">Refresh Status</button>
+        </section>
+
+        <section class="panel create_panel">
+            <div class="panel_header">
+                <h2>Create Monitor</h2>
+                <p>Choose a project and template, then add a monitor entry to the registry.</p>
+            </div>
+            <form id="create_form" class="create_form">
+                <label class="field">
+                    <span>Project</span>
+                    <select id="project_select" name="project_code"></select>
+                </label>
+                <label class="field">
+                    <span>Template</span>
+                    <select id="template_select" name="template_name"></select>
+                </label>
+                <button class="action_button primary" type="submit">Create Monitor</button>
+            </form>
+        </section>
+
+        <section class="panel status_panel">
+            <div class="panel_header">
+                <div>
+                    <h2>Monitor Status</h2>
+                    <p>Auto-refresh runs every 5 seconds while the page is open.</p>
+                </div>
+                <label class="field inline_field">
+                    <span>Filter Project</span>
+                    <select id="filter_project_select">
+                        <option value="">All Projects</option>
+                    </select>
+                </label>
+            </div>
+
+            <div class="table_wrap">
+                <table class="status_table">
+                    <thead>
+                        <tr>
+                            <th>Monitor</th>
+                            <th>Project</th>
+                            <th>Template</th>
+                            <th>Status</th>
+                            <th>PID</th>
+                            <th>CPU %</th>
+                            <th>Memory MB</th>
+                            <th>Last Started</th>
+                            <th>Last Log</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="monitors_body">
+                        <tr>
+                            <td colspan="10" class="empty_row">Loading monitors...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="message_box" class="message_box hidden" aria-live="polite"></section>
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
