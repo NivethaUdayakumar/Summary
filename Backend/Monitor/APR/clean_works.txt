@@ -1,0 +1,16 @@
+APR Cleanup Process
+
+1. FLOW_MONITOR.py always calls APR_CLOSE.close_context in its final cleanup path.
+2. APR_CLOSE rebuilds the latest absolute runtime paths first so it can still save state even if APR_VARS.py was edited during runtime.
+3. If state or force-extract payload is missing from memory, cleanup reloads them from disk before changing anything.
+4. APR_CLOSE calls APR_STATUS_ACTION.shutdown_runtime to stop active batch work.
+5. shutdown_runtime terminates every running batch subprocess.
+6. Every run that was already submitted in a running batch is reset to "Await Extraction".
+7. Every run still waiting in the pending queue is also reset to "Await Extraction".
+8. Reset runs keep persistent state only; batch processes, queues, and other runtime objects are not written into the state file.
+9. After reset, the updated APR state JSON is written back to disk.
+10. If the force-extract JSON was changed during runtime, that JSON file is also written back to disk.
+11. The SQLite writer is closed after pending tracker work is drained.
+12. The APR logger handlers are then closed cleanly.
+13. Unexpected cleanup errors are caught so cleanup continues with the remaining close steps instead of leaving resources half-open.
+14. Result: killed batches do not stay stuck in "Extracting"; they return to "Await Extraction" and can be picked up again on the next monitor cycle.

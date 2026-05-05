@@ -23,6 +23,7 @@ APP_PROJECT_JSON = CONFIG_DIR / "app.project.json"
 PROJECTS_BASE_DIR = Path(os.environ.get("PROJECTS_BASE_DIR", "/proj"))
 REGISTRY_DB = APPDATA_DIR / "monitor_registry.db"
 TRACKER_PREVIEW_ROWS = 100
+FLOW_MONITOR_SCRIPT = BACKEND_MONITOR_DIR / "FLOW" / "FLOW_MONITOR.py"
 
 
 class MonitorService:
@@ -61,6 +62,24 @@ class MonitorService:
     def _safe_name(self, value: str) -> bool:
         return bool(re.fullmatch(r"[A-Za-z0-9_]+", value or ""))
 
+    def _is_central_flow_template(self, template_dir: Path, template_name: str):
+        module_suffixes = [
+            "MONITOR_ITEMS",
+            "ITEM_STATUS",
+            "STATUS_ACTION",
+            "UPDATE_TRACKER",
+            "UPDATE_STATE",
+            "UPDATE_LOG",
+            "SLEEP",
+            "CLOSE",
+        ]
+        required_modules = []
+        for suffix in module_suffixes:
+            root_path = template_dir / f"{template_name}_{suffix}.py"
+            monitoring_path = template_dir / "MONITORING" / f"{template_name}_{suffix}.py"
+            required_modules.append(root_path.exists() or monitoring_path.exists())
+        return FLOW_MONITOR_SCRIPT.exists() and all(required_modules)
+
     def list_projects(self):
         if not APP_PROJECT_JSON.exists():
             return []
@@ -86,16 +105,24 @@ class MonitorService:
                 continue
 
             template_name = folder.name
-            if template_name.startswith("__"):
+            if template_name.startswith("__") or template_name == "FLOW":
                 continue
 
             main_script = folder / f"{template_name}.py"
-            if not main_script.exists():
+            is_central_flow = self._is_central_flow_template(folder, template_name)
+            if is_central_flow:
+                script_path = FLOW_MONITOR_SCRIPT
+                launch_mode = "flow"
+            elif main_script.exists():
+                script_path = main_script
+                launch_mode = "legacy"
+            else:
                 continue
 
             templates.append({
                 "template_name": template_name,
-                "script_path": str(main_script),
+                "script_path": str(script_path),
+                "launch_mode": launch_mode,
                 "has_hide_runs": False,
                 "has_update_run": True
             })
@@ -112,10 +139,22 @@ class MonitorService:
         return BACKEND_MONITOR_DIR / template_name
 
     def get_project_db_path(self, project_code: str, template_name: str):
-        return PROJECTS_BASE_DIR / project_code / "DashAI" / f"DashAI_{template_name}.db"
+        db_name = f"DashAI_{template_name}.db"
+        try:
+            _, defs_module = self._load_template_modules(template_name)
+            db_name = getattr(defs_module, "DB_NAME", db_name) or db_name
+        except Exception:
+            pass
+        return PROJECTS_BASE_DIR / project_code / "DashAI" / db_name
 
     def get_project_log_dir(self, project_code: str, template_name: str):
-        return PROJECTS_BASE_DIR / project_code / "DashAI" / f"Logs{template_name}"
+        log_dir_name = f"Logs{template_name}"
+        try:
+            _, defs_module = self._load_template_modules(template_name)
+            log_dir_name = getattr(defs_module, "LOG_DIR", log_dir_name) or log_dir_name
+        except Exception:
+            pass
+        return PROJECTS_BASE_DIR / project_code / "DashAI" / log_dir_name
 
     def _load_python_module(self, module_path: Path, module_name: str):
         if not module_path.exists():
@@ -126,13 +165,21 @@ class MonitorService:
             raise ImportError(f"Unable to load module: {module_path}")
 
         module = importlib.util.module_from_spec(spec)
+        module_dir = str(module_path.parent)
+        if module_dir not in sys.path:
+            sys.path.insert(0, module_dir)
         spec.loader.exec_module(module)
         return module
 
     def _load_template_modules(self, template_name: str):
         template_dir = self._get_template_dir(template_name)
-        db_ops_path = template_dir / f"{template_name}_DB_Operations.py"
-        defs_path = template_dir / f"{template_name}_Definitions.py"
+        db_ops_path = template_dir / f"{template_name}_DB_ACTIONS.py"
+        if not db_ops_path.exists():
+            db_ops_path = template_dir / f"{template_name}_DB_Operations.py"
+
+        defs_path = template_dir / f"{template_name}_VARS.py"
+        if not defs_path.exists():
+            defs_path = template_dir / f"{template_name}_Definitions.py"
 
         db_ops = self._load_python_module(db_ops_path, f"{template_name}_db_ops")
         defs = self._load_python_module(defs_path, f"{template_name}_defs")
@@ -146,7 +193,7 @@ class MonitorService:
         return f"{job}--{milestone}--{block}--{stage}"
 
     def _supports_graceful_shutdown(self, template_name: str):
-        return template_name == "APR"
+        return self._is_central_flow_template(self._get_template_dir(template_name), template_name) or template_name == "APR"
 
     def create_monitor(self, project_code: str, template_name: str):
         if not self._safe_name(project_code):
@@ -252,8 +299,11 @@ class MonitorService:
                 "process_status": "not_running"
             }
 
-    def _spawn_monitor(self, script_path: str, project_code: str):
-        cmd = [sys.executable, script_path, project_code]
+    def _spawn_monitor(self, script_path: str, template_name: str, project_code: str):
+        if Path(script_path).resolve() == FLOW_MONITOR_SCRIPT.resolve():
+            cmd = [sys.executable, script_path, template_name, project_code]
+        else:
+            cmd = [sys.executable, script_path, project_code]
 
         kwargs = {
             "cwd": str(ROOT_DIR),
@@ -287,14 +337,16 @@ class MonitorService:
                 "status": row["status"] if row["status"] in {"stopping", "terminating"} else "running"
             }
 
-        new_pid = self._spawn_monitor(row["script_path"], row["project_code"])
+        template_info = self._get_template_info(row["template_name"])
+        script_path = template_info["script_path"] if template_info else row["script_path"]
+        new_pid = self._spawn_monitor(script_path, row["template_name"], row["project_code"])
         now = self._now()
 
         cur.execute("""
             UPDATE monitor_registry
-            SET pid = ?, status = ?, updated_at = ?, last_started_at = ?
+            SET pid = ?, script_path = ?, status = ?, updated_at = ?, last_started_at = ?
             WHERE monitor_name = ?
-        """, (new_pid, "running", now, now, monitor_name))
+        """, (new_pid, script_path, "running", now, now, monitor_name))
         conn.commit()
         conn.close()
 
@@ -719,12 +771,18 @@ class MonitorService:
         }
 
     def _get_force_extract_file(self, project_code: str, defs_module):
-        state_dir_name = getattr(defs_module, "STATE_DIR", "States")
         force_file_name = getattr(defs_module, "FORCE_EXTRACT_FILE_NAME", None)
         if not force_file_name:
             raise AttributeError("Template does not define FORCE_EXTRACT_FILE_NAME")
 
-        state_dir = PROJECTS_BASE_DIR / project_code / "DashAI" / state_dir_name
+        dashai_dir = PROJECTS_BASE_DIR / project_code / "DashAI"
+        dashai_dir.mkdir(parents=True, exist_ok=True)
+
+        if getattr(defs_module, "FORCE_EXTRACT_IN_DASHAI_ROOT", False):
+            return dashai_dir / force_file_name
+
+        state_dir_name = getattr(defs_module, "STATE_DIR", "States")
+        state_dir = dashai_dir / state_dir_name
         state_dir.mkdir(parents=True, exist_ok=True)
         return state_dir / force_file_name
 
@@ -737,15 +795,61 @@ class MonitorService:
         _, defs = self._load_template_modules(template_name)
         force_extract_file = self._get_force_extract_file(project_code, defs)
 
-        existing = []
+        comment_text = getattr(
+            defs,
+            "FORCE_EXTRACT_JSON_COMMENT",
+            "Input type is { job: j, milestone:m, block: b, stage: s }",
+        )
+        items_key = getattr(defs, "FORCE_EXTRACT_JSON_ITEMS_KEY", "items")
+        payload = {
+            "_comment": comment_text,
+            items_key: [],
+        }
         if force_extract_file.exists():
-            existing = [
-                line.strip()
-                for line in force_extract_file.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
+            try:
+                raw_payload = json.loads(force_extract_file.read_text(encoding="utf-8"))
+                if isinstance(raw_payload, list):
+                    payload[items_key] = raw_payload
+                elif isinstance(raw_payload, dict):
+                    payload.update(raw_payload)
+            except Exception:
+                payload = {
+                    "_comment": comment_text,
+                    items_key: [],
+                }
 
-        existing_set = set(existing)
+        payload["_comment"] = comment_text
+        if not isinstance(payload.get(items_key), list):
+            payload[items_key] = []
+
+        normalized_items = []
+        existing_set = set()
+        for item in payload[items_key]:
+            if not isinstance(item, dict):
+                continue
+
+            normalized_item = {
+                "job": str(item.get("job", item.get("Job", "")) or "").strip(),
+                "milestone": str(item.get("milestone", item.get("Milestone", "")) or "").strip(),
+                "block": str(item.get("block", item.get("Block", "")) or "").strip(),
+                "stage": str(item.get("stage", item.get("Stage", "")) or "").strip(),
+            }
+            if not all(normalized_item.values()):
+                continue
+
+            state_key = self._make_state_key(
+                defs,
+                normalized_item["job"],
+                normalized_item["milestone"],
+                normalized_item["block"],
+                normalized_item["stage"],
+            )
+            if state_key in existing_set:
+                continue
+            existing_set.add(state_key)
+            normalized_items.append(normalized_item)
+        payload[items_key] = normalized_items
+
         queued = 0
 
         for row in run_rows:
@@ -761,13 +865,19 @@ class MonitorService:
             if state_key in existing_set:
                 continue
 
-            existing.append(state_key)
+            payload[items_key].append(
+                {
+                    "job": job,
+                    "milestone": milestone,
+                    "block": block,
+                    "stage": stage,
+                }
+            )
             existing_set.add(state_key)
             queued += 1
 
-        payload = "\n".join(existing) + ("\n" if existing else "")
         tmp_file = force_extract_file.with_suffix(force_extract_file.suffix + ".tmp")
-        tmp_file.write_text(payload, encoding="utf-8")
+        tmp_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         tmp_file.replace(force_extract_file)
 
         return {

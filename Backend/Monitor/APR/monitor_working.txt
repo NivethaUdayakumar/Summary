@@ -1,0 +1,25 @@
+APR Monitoring Process
+
+1. FLOW_MONITOR.py starts the APR flow once with FLOW and PROJECT_CODE from sys args.
+2. APR_MONITOR_ITEMS.build_context creates the long-lived runtime context for that project.
+3. Every monitor loop, APR_MONITOR_ITEMS.get_runtime_paths rebuilds absolute paths from APR_VARS.py.
+4. APR_VARS.py is reloaded on demand, so edits to batch size, poll time, stages, paths, and other settings are picked up without restarting the monitor.
+5. The monitor refreshes the logger, state file path, force-extract JSON path, and tracker writer path each cycle.
+6. The state file is loaded fresh each cycle. Only persistent run fields are stored there; worker queues and subprocess objects are kept only in memory.
+7. The force-extract JSON is read from /proj/<project_code>/DashAI/APR_FORCE_EXTRACT.json and normalized into items with keys job, milestone, block, and stage.
+8. IMP run directories are scanned using absolute paths and the configured depth / flow / tool filters.
+9. Stage log files are discovered for each configured APR stage.
+10. APR_ITEM_STATUS computes the tracker status for each log using current file metadata, persisted state, and whether that run is already in a batch.
+11. Runs in "Await Extraction" are queued into the batch runtime owned by APR_STATUS_ACTION.
+12. Pending runs are grouped into batches of APR_VARS.BATCH_SIZE.
+13. At most APR_VARS.MAX_PARALLEL_BATCHES batch subprocesses run at the same time.
+14. If there are no running batches and the pending queue does not reach BATCH_SIZE within APR_VARS.BATCH_RUN_WAIT_TIME seconds, the current pending count is launched as a short batch.
+15. Each batch command is launched in the required format:
+    utilq -Is && python APR_TIMING_INNOVUS.py <project_code> <stage> <run_dir> && ...
+16. When a batch is submitted, all its runs are marked as "Extracting" in memory/state and one batch submission log line is written.
+17. When a batch completes, the monitor checks which DashAI timing DB files were written after submit time.
+18. Successful runs move to "Completed"; the first missing run becomes "Extraction Failed"; later missing runs are returned to "Await Extraction" for retry.
+19. APR_UPDATE_TRACKER applies KPI extraction from EXTRACTORS/APR_KPI_EXTRACT.py and submits tracker rows to SQLite.
+20. APR_DB_ACTIONS refreshes tracker schema dynamically, so new KPI columns can be added while the monitor is running. Existing rows keep blank values for new text columns until updated.
+21. Completed force-extract requests are removed from the JSON file after extraction finishes.
+22. APR_UPDATE_LOG only writes batch-level log lines: submitted count, completed count, success count, and failed count.

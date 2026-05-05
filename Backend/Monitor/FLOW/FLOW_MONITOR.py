@@ -1,18 +1,20 @@
 import FLOW_ACTIONS
 
+
 def main():
     context = FLOW_ACTIONS.CHECK_SYS_ARGS()
     try:
-        while True:
-            for MONITOR_ITEM in FLOW_ACTIONS.GET_MONITOR_ITEMS(context):
-                MONITOR_ITEM_STATUS = FLOW_ACTIONS.GET_ITEM_STATUS(context, MONITOR_ITEM)
-                FLOW_ACTIONS.PERFORM_STATUS_ACTION(context, MONITOR_ITEM_STATUS)
-                FLOW_ACTIONS.UPDATE_TRACKER(context, MONITOR_ITEM_STATUS)
-                FLOW_ACTIONS.UPDATE_STATE(context, MONITOR_ITEM_STATUS)
-                FLOW_ACTIONS.UPDATE_LOG(context, MONITOR_ITEM_STATUS)
+        while not FLOW_ACTIONS.SHOULD_EXIT(context):
+            for monitor_item in FLOW_ACTIONS.GET_MONITOR_ITEMS(context):
+                monitor_item_status = FLOW_ACTIONS.GET_ITEM_STATUS(context, monitor_item)
+                FLOW_ACTIONS.PERFORM_STATUS_ACTION(context, monitor_item_status)
+                FLOW_ACTIONS.UPDATE_TRACKER(context, monitor_item_status)
+                FLOW_ACTIONS.UPDATE_STATE(context, monitor_item_status)
+                FLOW_ACTIONS.UPDATE_LOG(context, monitor_item_status)
             FLOW_ACTIONS.SLEEP(context)
     finally:
         FLOW_ACTIONS.CLOSE(context)
+
 
 if __name__ == "__main__":
     main()
