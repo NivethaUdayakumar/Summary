@@ -1,15 +1,17 @@
 import APR_VARS
 from Backend.Monitor.APR.EXTRACTORS.APR_KPI_EXTRACT import extract_apr_kpi
+from Backend.Monitor.APR.MONITORING import APR_STATUS_ACTION
 
 
-def apply_kpi_status(tracker_record, log_path):
+def apply_kpi_status(tracker_record, log_path, state_entry=None):
     """
     Function Name: apply_kpi_status
     Purpose: Populate KPI fields and final promote/comments values based on the extraction result for one tracker row.
-    Input Params: tracker_record (dict), log_path (str)
+    Input Params: tracker_record (dict), log_path (str), state_entry (dict | None)
     Output: tracker_record (dict)
     """
     settings = APR_VARS.get_runtime_settings()
+    validation_error = APR_STATUS_ACTION.get_validation_error_code(state_entry)
     if tracker_record["Status"] == settings["STATE_DONE"]:
         tracker_record.update(extract_apr_kpi(log_path))
         is_valid = all(tracker_record[column_name] != "" for column_name in settings["KPI_COLUMNS"])
@@ -17,6 +19,9 @@ def apply_kpi_status(tracker_record, log_path):
         tracker_record["Promote"] = "yes" if is_valid else "no"
         if not is_valid:
             tracker_record["Status"] = settings["STATE_FAILED"]
+    elif validation_error and tracker_record["Status"] in {settings["STATE_FAILED"], settings["STATE_EXTRACT_FAILED"]}:
+        tracker_record["Comments"] = validation_error
+        tracker_record["Promote"] = "no"
     elif tracker_record["Status"] in {settings["STATE_FAILED"], settings["STATE_EXTRACT_FAILED"]}:
         tracker_record["Comments"] = "ERR001"
         tracker_record["Promote"] = "no"
@@ -32,7 +37,7 @@ def update_tracker(context, file_item):
     """
     settings = APR_VARS.get_runtime_settings()
     context["writer"].check()
-    tracker_record = apply_kpi_status(file_item["tracker_record"], file_item["log_path"])
+    tracker_record = apply_kpi_status(file_item["tracker_record"], file_item["log_path"], file_item["state_entry"])
     file_item["tracker_record"] = tracker_record
 
     if file_item["state_entry"].get("Last_status") == settings["STATE_DONE"] and tracker_record["Status"] == settings["STATE_FAILED"]:

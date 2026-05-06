@@ -8,11 +8,14 @@ import time
 from pathlib import Path
 
 import APR_VARS
+from Backend.Monitor.APR.EXTRACTORS.APR_KPI_EXTRACT import get_kpi_report_path
+from Backend.Monitor.APR.EXTRACTORS.APR_TIMING_INNOVUS import get_timing_report_paths
 import Backend.Monitor.APR.MONITORING.APR_SLEEP as APR_SLEEP
 from Backend.Monitor.APR.MONITORING import APR_UPDATE_LOG
 
 
 _BATCH_RUNTIMES = {}
+_VALIDATION_RESULT_PREFIX = "validation_failed:"
 
 
 def _get_runtime(context):
@@ -59,6 +62,43 @@ def is_item_in_flight(context, state_key):
     return any(state_key in batch_info["state_keys"] for batch_info in runtime["running_batches"].values())
 
 
+def get_validation_error_code(state_entry):
+    """
+    Function Name: get_validation_error_code
+    Purpose: Read the persisted APR validation-failure code from one state entry when the run was rejected before extraction.
+    Input Params: state_entry (dict)
+    Output: error_code (str)
+    """
+    if not isinstance(state_entry, dict):
+        return ""
+
+    last_extract_result = str(state_entry.get("Last_extract_result") or "").strip()
+    if not last_extract_result.startswith(_VALIDATION_RESULT_PREFIX):
+        return ""
+
+    error_code = last_extract_result[len(_VALIDATION_RESULT_PREFIX) :].strip().upper()
+    return error_code if error_code in {"ERR001", "ERR002"} else ""
+
+
+def check_valid_job(file_item):
+    """
+    Function Name: check_valid_job
+    Purpose: Reject APR runs before batch submission when their KPI report or timing report inputs are missing.
+    Input Params: file_item (dict)
+    Output: error_code (str)
+    """
+    log_path = os.path.abspath(file_item["log_path"])
+    if not os.path.exists(get_kpi_report_path(log_path)):
+        return "ERR002"
+
+    run_dir = os.path.abspath(str(Path(log_path).resolve().parent.parent))
+    timing_report_paths = get_timing_report_paths(run_dir, file_item["log_meta"]["Stage"])
+    if not timing_report_paths:
+        return "ERR001"
+
+    return ""
+
+
 def reconcile_batches(context, state):
     """
     Function Name: reconcile_batches
@@ -103,6 +143,13 @@ def perform_status_action(context, file_item):
     """
     state_await = APR_VARS.get_setting("STATE_AWAIT")
     if file_item["tracker_record"]["Status"] != state_await or APR_SLEEP.should_exit():
+        return
+
+    error_code = check_valid_job(file_item)
+    if error_code:
+        _remove_pending_item(context, file_item["state_key"])
+        _mark_file_item_invalid(context, file_item, error_code)
+        _remove_force_extract_request(context, file_item["state_key"])
         return
 
     runtime = _get_runtime(context)
@@ -310,6 +357,33 @@ def _mark_batch_items_extracting(context, batch_items):
     context["state_dirty"] = True
 
 
+def _mark_file_item_invalid(context, file_item, error_code):
+    """
+    Function Name: _mark_file_item_invalid
+    Purpose: Persist the APR tracker/state outcome for one run that failed pre-submit validation and must not enter extraction.
+    Input Params: context (dict), file_item (dict), error_code (str)
+    Output: outputs (None)
+    """
+    status_by_error = {
+        "ERR001": APR_VARS.get_setting("STATE_EXTRACT_FAILED"),
+        "ERR002": APR_VARS.get_setting("STATE_FAILED"),
+    }
+    status = status_by_error.get(error_code, APR_VARS.get_setting("STATE_FAILED"))
+    completed_at = APR_VARS.now_str()
+
+    file_item["tracker_record"]["Comments"] = error_code
+    file_item["tracker_record"]["Promote"] = "no"
+    file_item["tracker_record"]["Status"] = status
+
+    file_item["state_entry"].setdefault("Created", completed_at)
+    file_item["state_entry"]["Force_extract"] = 0
+    file_item["state_entry"]["Last_extract_finished_at"] = completed_at
+    file_item["state_entry"]["Last_extract_result"] = f"{_VALIDATION_RESULT_PREFIX}{error_code}"
+    file_item["state_entry"]["Last_status"] = status
+    file_item["state_changed"] = True
+    context["state_dirty"] = True
+
+
 def _mark_file_item_extracting(context, file_item):
     """
     Function Name: _mark_file_item_extracting
@@ -323,6 +397,51 @@ def _mark_file_item_extracting(context, file_item):
     file_item["state_entry"]["Last_status"] = state_extracting
     file_item["state_changed"] = True
     context["state_dirty"] = True
+
+
+def _remove_force_extract_request(context, state_key):
+    """
+    Function Name: _remove_force_extract_request
+    Purpose: Drop one APR force-extract request after it was rejected during pre-submit validation so it is not retried every cycle.
+    Input Params: context (dict), state_key (str)
+    Output: outputs (None)
+    """
+    payload = context.get("force_extract_payload")
+    if not isinstance(payload, dict):
+        return
+
+    items_key = APR_VARS.get_setting("FORCE_EXTRACT_JSON_ITEMS_KEY")
+    items = payload.get(items_key)
+    if not isinstance(items, list):
+        return
+
+    filtered_items = []
+    changed = False
+    for item in items:
+        item_state_key = APR_VARS.make_state_key(
+            str(item.get("job", item.get("Job", "")) or "").strip(),
+            str(item.get("milestone", item.get("Milestone", "")) or "").strip(),
+            str(item.get("block", item.get("Block", "")) or "").strip(),
+            str(item.get("stage", item.get("Stage", "")) or "").strip(),
+        )
+        if item_state_key == state_key:
+            changed = True
+            continue
+        filtered_items.append(item)
+
+    if changed:
+        payload[items_key] = filtered_items
+        context["force_extract_dirty"] = True
+
+
+def _remove_pending_item(context, state_key):
+    """
+    Function Name: _remove_pending_item
+    Purpose: Drop one APR run from the pending batch queue after pre-submit validation fails.
+    Input Params: context (dict), state_key (str)
+    Output: outputs (None)
+    """
+    _get_runtime(context)["pending_items"].pop(state_key, None)
 
 
 def _finalize_batch(state, batch_info, return_code):

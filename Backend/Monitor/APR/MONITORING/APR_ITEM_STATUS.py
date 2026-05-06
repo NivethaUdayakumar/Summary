@@ -144,6 +144,7 @@ def compute_status(state_entry, log_path, mtime, size, is_extracting):
     last_change_time = state_entry.get("Last_change_time")
     last_extracted_mtime = state_entry.get("Last_extracted_mtime")
     last_status = state_entry.get("Last_status")
+    validation_error = APR_STATUS_ACTION.get_validation_error_code(state_entry)
     rerun_count = int(state_entry.get("Rerun", 0) or 0)
     force_extract = int(state_entry.get("Force_extract", 0) or 0)
     file_changed = last_seen_mtime is None or mtime != last_seen_mtime or size != last_seen_size
@@ -157,6 +158,10 @@ def compute_status(state_entry, log_path, mtime, size, is_extracting):
         status = settings["STATE_EXTRACTING"]
     elif force_extract == 1:
         status = settings["STATE_AWAIT"]
+    elif validation_error == "ERR001" and not file_changed:
+        status = settings["STATE_EXTRACT_FAILED"]
+    elif validation_error == "ERR002" and not file_changed:
+        status = settings["STATE_FAILED"]
     elif last_status == settings["STATE_EXTRACTING"]:
         status = settings["STATE_AWAIT"]
     elif last_status == settings["STATE_EXTRACT_FAILED"] and not file_changed:
