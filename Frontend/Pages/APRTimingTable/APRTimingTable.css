@@ -1,0 +1,56 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  padding: 18px;
+  background: #f5f7fa;
+  color: #1b1c1d;
+  font-family: Arial, sans-serif;
+}
+
+table.dataTable td,
+table.dataTable th {
+  border: 1px solid #9f9d9d !important;
+}
+
+th.dt-body-right {
+  text-align: left !important;
+}
+
+.apr-timing-shell {
+  min-height: 100%;
+}
+
+.apr-timing-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.apr-timing-title {
+  margin: 0 0 6px;
+  font-size: 24px;
+}
+
+.apr-timing-meta,
+.apr-timing-source {
+  margin: 0;
+  color: rgba(0, 0, 0, 0.68);
+  line-height: 1.45;
+}
+
+.apr-timing-source {
+  margin-top: 6px;
+  word-break: break-all;
+  font-size: 13px;
+}
+
+#aprTimingTable {
+  width: 100%;
+}

@@ -62,11 +62,11 @@ def _stage_db_root(project_code):
 
 
 def _stage_db_path(project_code, block_name, milestone_name, job_name, stage_name):
-    return _stage_db_root(project_code) / str(block_name or '').strip() / str(milestone_name or '').strip() / str(job_name or '').strip() / f'{str(stage_name or "").strip()}.db'
+    return _stage_db_root(project_code) / str(block_name or '').strip() / str(milestone_name or '').strip() / str(job_name or '').strip() / f'{str(stage_name or "").strip()}_timing.db'
 
 
 def _timing_source_label(project_code):
-    return f'{_stage_db_root(project_code).as_posix()} / */*/*/*.db / {TIMING_SUMMARY_TABLE}'
+    return f'{_stage_db_root(project_code).as_posix()} / */*/*/*_timing.db / {TIMING_SUMMARY_TABLE}'
 
 
 def _session_scope():

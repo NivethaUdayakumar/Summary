@@ -3,11 +3,11 @@ import os
 import shlex
 import signal
 import subprocess
-import sys
 import time
 from pathlib import Path
 
 import APR_VARS
+import psutil
 from Backend.Monitor.APR.EXTRACTORS.APR_KPI_EXTRACT import get_kpi_report_path
 from Backend.Monitor.APR.EXTRACTORS.APR_TIMING_INNOVUS import get_timing_report_paths
 import Backend.Monitor.APR.MONITORING.APR_SLEEP as APR_SLEEP
@@ -16,6 +16,8 @@ from Backend.Monitor.APR.MONITORING import APR_UPDATE_LOG
 
 _BATCH_RUNTIMES = {}
 _VALIDATION_RESULT_PREFIX = "validation_failed:"
+_BATCH_PYTHON_MODULE = "Python3/3.11.1"
+_BATCH_PYTHON_COMMAND = "Python3"
 
 
 def _get_runtime(context):
@@ -222,7 +224,7 @@ def _get_timing_db_path(project_code, log_meta):
             str(Path(APR_VARS.get_setting("PROJECTS_BASE_DIR")) / project_code / "DashAI" / "APR_RUNS")
         )
     )
-    return str(project_root / log_meta["Block"] / log_meta["Milestone"] / log_meta["Job"] / f"{log_meta['Stage']}.db")
+    return str(project_root / log_meta["Block"] / log_meta["Milestone"] / log_meta["Job"] / f"{log_meta['Stage']}_timing.db")
 
 
 def _dispatch_ready_batches(context):
@@ -298,7 +300,7 @@ def _submit_batch(context, runtime, batch_items):
 def _build_batch_command(context, batch_items):
     """
     Function Name: _build_batch_command
-    Purpose: Build the APR batch shell command in the required utilq plus chained extractor-command format.
+    Purpose: Build the APR batch shell command in the required module-load plus utilq chained extractor-command format.
     Input Params: context (dict), batch_items (list[dict])
     Output: command_text (str)
     """
@@ -308,7 +310,7 @@ def _build_batch_command(context, batch_items):
         command_parts.append(
             " ".join(
                 [
-                    shlex.quote(sys.executable),
+                    _BATCH_PYTHON_COMMAND,
                     shlex.quote(timing_script),
                     shlex.quote(context["project_code"]),
                     shlex.quote(batch_item["stage"]),
@@ -316,7 +318,15 @@ def _build_batch_command(context, batch_items):
                 ]
             )
         )
-    return "utilq -Is && " + " && ".join(command_parts)
+    if not command_parts:
+        return f"module load {_BATCH_PYTHON_MODULE}"
+
+    return " && ".join(
+        [
+            f"module load {_BATCH_PYTHON_MODULE}",
+            f"utilq -Is {command_parts[0]}",
+        ] + command_parts[1:]
+    )
 
 
 def _spawn_batch_process(command_text):
@@ -327,16 +337,17 @@ def _spawn_batch_process(command_text):
     Output: process (subprocess.Popen)
     """
     kwargs = {
-        "shell": True,
         "stderr": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
     }
     if os.name == "nt":
+        kwargs["shell"] = True
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["executable"] = os.environ.get("SHELL", "/bin/bash")
-        kwargs["start_new_session"] = True
-    return subprocess.Popen(command_text, **kwargs)
+        return subprocess.Popen(command_text, **kwargs)
+
+    shell_path = "/bin/bash" if os.path.exists("/bin/bash") else os.environ.get("SHELL", "/bin/sh")
+    kwargs["start_new_session"] = True
+    return subprocess.Popen([shell_path, "-lc", command_text], **kwargs)
 
 
 def _mark_batch_items_extracting(context, batch_items):
@@ -595,8 +606,24 @@ def _terminate_batch_process(process):
 
     try:
         if os.name == "nt":
-            process.terminate()
-            process.wait(timeout=3)
+            root_process = psutil.Process(process.pid)
+            child_processes = root_process.children(recursive=True)
+            for child_process in child_processes:
+                try:
+                    child_process.terminate()
+                except Exception:
+                    pass
+            try:
+                root_process.terminate()
+            except Exception:
+                pass
+
+            _, alive_processes = psutil.wait_procs([root_process, *child_processes], timeout=3)
+            for alive_process in alive_processes:
+                try:
+                    alive_process.kill()
+                except Exception:
+                    pass
         else:
             os.killpg(os.getpgid(process.pid), signal.SIGTERM)
             process.wait(timeout=3)

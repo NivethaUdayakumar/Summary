@@ -257,7 +257,7 @@ def get_timing_db_path(project_code, scope):
         scope["Block"],
         scope["Milestone"],
         scope["Job"],
-        f'{scope["Stage"]}.db',
+        f'{scope["Stage"]}_timing.db',
     ))
 
 

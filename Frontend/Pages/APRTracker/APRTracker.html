@@ -19,9 +19,9 @@
             <option value="kpiFocus">KPI Focus</option>
         </select>
 
-        <button id="clearFiltersBtn" class="ui button">Clear All Applied Filters</button>
-        <button id="watchlistManagerBtn" class="ui button">Watchlist Manager</button>
-        <button id="reloadTableBtn" class="ui button">Reload</button>
+        <button id="clearFiltersBtn" class="ui button"><i class="filter icon"></i>Clear All Applied Filters</button>
+        <button id="watchlistManagerBtn" class="ui button"><i class="bookmark icon"></i>Watchlist Manager</button>
+        <button id="reloadTableBtn" class="ui button"><i class="sync alternate icon"></i>Reload</button>
     </div>
 
     <table id="aprTrackerTable" class="display nowrap"></table>
@@ -31,13 +31,11 @@
 
     <script src="/static/AdvancedBuilders/AdvancedTable/AdvancedTable.js"></script>
 
+    <script src="/static/Pages/APRTracker/actionsLoader.js"></script>
     <script src="/static/Pages/APRTracker/buttons/promote.js"></script>
     <script src="/static/Pages/APRTracker/buttons/watchlist.js"></script>
-    <script src="/static/Pages/APRTracker/buttons/delete.js"></script>
-    <script src="/static/Pages/APRTracker/buttons/export.js"></script>
-    <script src="/static/Pages/APRTracker/buttons/history.js"></script>
-
-    <script src="/static/Pages/APRTracker/actionsLoader.js"></script>
+    <script src="/static/Pages/APRTracker/buttons/summary.js"></script>
+    <script src="/static/Pages/APRTracker/buttons/detail.js"></script>
     <script src="/static/Pages/APRTracker/columns.js"></script>
     <script src="/static/Pages/APRTracker/presets.js"></script>
     <script src="/static/Pages/APRTracker/APRTracker.js"></script>

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>APR Timing Table</title>
+
+    <link rel="stylesheet" href="/static/Pages/APRTimingTable/APRTimingTable.css" />
+    <link rel="stylesheet" href="/static/Vendor/datatables/datatables.min.css" />
+    <link rel="stylesheet" href="/static/Vendor/semantic-ui/semantic.min.css" />
+</head>
+<body>
+    <div class="apr-timing-shell">
+        <div class="apr-timing-toolbar">
+            <div>
+                <h1 id="timingTableTitle" class="apr-timing-title">APR Timing Table</h1>
+                <p id="timingTableMeta" class="apr-timing-meta"></p>
+                <p id="timingTableSource" class="apr-timing-source"></p>
+            </div>
+            <button id="reloadTimingTableBtn" class="ui button">
+                <i class="sync alternate icon"></i>Reload
+            </button>
+        </div>
+
+        <table id="aprTimingTable" class="display nowrap"></table>
+    </div>
+
+    <script src="/static/Vendor/jquery/jquery.min.js"></script>
+    <script src="/static/Vendor/datatables/datatables.min.js"></script>
+    <script src="/static/AdvancedBuilders/AdvancedTable/AdvancedTable.js"></script>
+    <script src="/static/Pages/APRTimingTable/APRTimingTable.js"></script>
+</body>
+</html>

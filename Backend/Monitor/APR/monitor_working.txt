@@ -15,7 +15,7 @@ APR Monitoring Process
 13. At most APR_VARS.MAX_PARALLEL_BATCHES batch subprocesses run at the same time.
 14. If there are no running batches and the pending queue does not reach BATCH_SIZE within APR_VARS.BATCH_RUN_WAIT_TIME seconds, the current pending count is launched as a short batch.
 15. Each batch command is launched in the required format:
-    utilq -Is && python APR_TIMING_INNOVUS.py <project_code> <stage> <run_dir> && ...
+    module load Python3/3.11.1 && utilq -Is Python3 <abs_path_to_APR_TIMING_INNOVUS.py> <project_code> <stage> <run_dir> && Python3 <abs_path_to_APR_TIMING_INNOVUS.py> <project_code> <stage> <run_dir> && ...
 16. When a batch is submitted, all its runs are marked as "Extracting" in memory/state and one batch submission log line is written.
 17. When a batch completes, the monitor checks which DashAI timing DB files were written after submit time.
 18. Successful runs move to "Completed"; the first missing run becomes "Extraction Failed"; later missing runs are returned to "Await Extraction" for retry.

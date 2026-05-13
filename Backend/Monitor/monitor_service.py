@@ -18,6 +18,9 @@ BACKEND_MONITOR_DIR = ROOT_DIR / "Backend" / "Monitor"
 CONFIG_DIR = ROOT_DIR / "Configurations"
 APPDATA_DIR = ROOT_DIR / "AppData"
 APPDATA_DIR.mkdir(parents=True, exist_ok=True)
+GRACEFUL_SHUTDOWN_WAIT_SECONDS = 5
+APR_BATCH_TERMINATION_WAIT_SECONDS = 3
+APR_TERMINATE_SHUTDOWN_BUFFER_SECONDS = 5
 
 APP_PROJECT_JSON = CONFIG_DIR / "app.project.json"
 PROJECTS_BASE_DIR = Path(os.environ.get("PROJECTS_BASE_DIR", "/proj"))
@@ -414,6 +417,44 @@ class MonitorService:
         except Exception:
             return False
 
+    def _wait_for_pid_exit(self, pid: int, timeout_seconds=None):
+        if not pid:
+            return True
+
+        if timeout_seconds is None:
+            while self._is_pid_alive(pid):
+                time.sleep(0.2)
+            return True
+
+        deadline = time.time() + max(0.0, float(timeout_seconds))
+        while time.time() < deadline:
+            if not self._is_pid_alive(pid):
+                return True
+            time.sleep(0.2)
+
+        return not self._is_pid_alive(pid)
+
+    def _get_shutdown_wait_seconds(self, template_name: str, action: str):
+        timeout_seconds = GRACEFUL_SHUTDOWN_WAIT_SECONDS
+        if action != "terminate" or template_name != "APR":
+            return timeout_seconds
+
+        try:
+            _, defs_module = self._load_template_modules(template_name)
+            if hasattr(defs_module, "get_runtime_settings"):
+                settings = defs_module.get_runtime_settings()
+                max_parallel_batches = int(settings.get("MAX_PARALLEL_BATCHES", 1) or 1)
+            else:
+                max_parallel_batches = int(getattr(defs_module, "MAX_PARALLEL_BATCHES", 1) or 1)
+        except Exception:
+            max_parallel_batches = 1
+
+        batch_cleanup_seconds = max(1, max_parallel_batches) * APR_BATCH_TERMINATION_WAIT_SECONDS
+        return max(
+            timeout_seconds,
+            batch_cleanup_seconds + APR_TERMINATE_SHUTDOWN_BUFFER_SECONDS,
+        )
+
     def stop_monitor(self, monitor_name: str):
         conn = self._connect_registry()
         cur = conn.cursor()
@@ -422,29 +463,24 @@ class MonitorService:
         if not row:
             conn.close()
             raise FileNotFoundError("Monitor not found")
+        conn.close()
 
         pid = row["pid"]
         if pid and self._supports_graceful_shutdown(row["template_name"]) and self._is_pid_alive(pid):
-            self._request_pid_shutdown(pid)
-            now = self._now()
-            cur.execute("""
-                UPDATE monitor_registry
-                SET status = ?, updated_at = ?
-                WHERE monitor_name = ?
-            """, ("stopping", now, monitor_name))
-            conn.commit()
-            conn.close()
-
-            return {
-                "monitor_name": monitor_name,
-                "status": "stopping",
-                "pid": pid
-            }
+            shutdown_requested = self._request_pid_shutdown(pid)
+            shutdown_wait_seconds = self._get_shutdown_wait_seconds(row["template_name"], "stop")
+            if shutdown_requested and self._wait_for_pid_exit(pid, shutdown_wait_seconds):
+                pid = None
+            else:
+                self._kill_pid(pid)
+                pid = None
 
         if pid:
             self._kill_pid(pid)
 
         now = self._now()
+        conn = self._connect_registry()
+        cur = conn.cursor()
         cur.execute("""
             UPDATE monitor_registry
             SET pid = NULL, status = ?, updated_at = ?
@@ -473,28 +509,22 @@ class MonitorService:
         if not row:
             conn.close()
             raise FileNotFoundError("Monitor not found")
+        conn.close()
 
         pid = row["pid"]
         if pid and self._supports_graceful_shutdown(row["template_name"]) and self._is_pid_alive(pid):
-            self._request_pid_shutdown(pid)
-            now = self._now()
-            cur.execute("""
-                UPDATE monitor_registry
-                SET status = ?, updated_at = ?
-                WHERE monitor_name = ?
-            """, ("terminating", now, monitor_name))
-            conn.commit()
-            conn.close()
+            shutdown_requested = self._request_pid_shutdown(pid)
+            if not shutdown_requested and self._is_pid_alive(pid):
+                raise RuntimeError(f"Unable to request graceful shutdown for monitor '{monitor_name}'")
 
-            return {
-                "monitor_name": monitor_name,
-                "status": "terminating",
-                "pid": pid
-            }
+            self._wait_for_pid_exit(pid)
+            pid = None
 
         if pid:
             self._kill_pid(pid)
 
+        conn = self._connect_registry()
+        cur = conn.cursor()
         cur.execute("DELETE FROM monitor_registry WHERE monitor_name = ?", (monitor_name,))
         conn.commit()
         conn.close()

@@ -1,12 +1,29 @@
-var APR_TRACKER_DB_LOCATION = 'AppData/App.db';
 var APR_TRACKER_TABLE_NAME = 'APR_TRACKER';
-var APR_TRACKER_PAGE_STATE = window.APR_TRACKER_PAGE_STATE || {
+var APR_TRACKER_PAGE = window.APR_TRACKER_PAGE || {
+    dbPath: '',
+    projectCode: '',
     table: null
 };
 
-window.APR_TRACKER_PAGE_STATE = APR_TRACKER_PAGE_STATE;
+window.APR_TRACKER_PAGE = APR_TRACKER_PAGE;
 
-function createAPRTrackerDropdownConfig(searchType) {
+/*
+Function Name: getAPRTrackerElement
+Purpose: Read one APR Tracker page element by its HTML id.
+Input Params: elementId (str)
+Output: element (HTMLElement | null)
+*/
+function getAPRTrackerElement(elementId) {
+    return document.getElementById(elementId);
+}
+
+/*
+Function Name: buildAPRTrackerDropdownConfig
+Purpose: Build the small DataTables dropdown config used by one filter type.
+Input Params: searchType (str)
+Output: dropdown_config (dict)
+*/
+function buildAPRTrackerDropdownConfig(searchType) {
     return {
         extend: 'dropdown',
         content: [
@@ -19,30 +36,81 @@ function createAPRTrackerDropdownConfig(searchType) {
     };
 }
 
-function getAPRTrackerListDropdownConfig() {
-    return createAPRTrackerDropdownConfig('searchList');
+/*
+Function Name: getAPRTrackerSelectedPresetName
+Purpose: Return the preset that is currently selected in the toolbar.
+Input Params: None
+Output: preset_name (str)
+*/
+function getAPRTrackerSelectedPresetName() {
+    var presetSelect = getAPRTrackerElement('presetSelect');
+
+    return presetSelect && presetSelect.value ? presetSelect.value : 'default';
 }
 
-function getAPRTrackerDateDropdownConfig() {
-    return createAPRTrackerDropdownConfig('searchDateTime');
+/*
+Function Name: loadAPRTrackerProjectCode
+Purpose: Read the active project code from the current browser session.
+Input Params: None
+Output: project_code (Promise[str])
+*/
+async function loadAPRTrackerProjectCode() {
+    var response = await fetch('/api/session');
+    var result;
+    var projectCode;
+
+    if (!response.ok) {
+        throw new Error('Unable to load session information.');
+    }
+
+    result = await response.json();
+    if (!result.success) {
+        throw new Error(result.error || 'Unable to load session information.');
+    }
+
+    projectCode = String(result.project_code || '').trim();
+    if (!projectCode || projectCode.toLowerCase() === 'unknown') {
+        throw new Error('project_code is missing from the current session.');
+    }
+
+    return projectCode;
 }
 
-function getAPRTrackerFloatDropdownConfig() {
-    return createAPRTrackerDropdownConfig('searchNumber');
+/*
+Function Name: buildAPRTrackerDbPath
+Purpose: Build the APR tracker database path from the current project code.
+Input Params: projectCode (str)
+Output: db_path (str)
+*/
+function buildAPRTrackerDbPath(projectCode) {
+    return 'AppData/App.db';
+    //return '/proj/' + String(projectCode || '').trim() + '/DashAI/DashAI_APR.db';
 }
 
+/*
+Function Name: fetchAPRTrackerRows
+Purpose: Load every APR tracker row from the project-specific DashAI APR database.
+Input Params: None
+Output: rows (Promise[list[dict]])
+*/
 async function fetchAPRTrackerRows() {
-    var response = await fetch('/api/read-table', {
+    var response;
+    var result;
+
+    if (!APR_TRACKER_PAGE.dbPath) {
+        throw new Error('APR tracker database path is not ready.');
+    }
+
+    response = await fetch('/api/read-table', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-            db_location: APR_TRACKER_DB_LOCATION,
+            db_location: APR_TRACKER_PAGE.dbPath,
             table_name: APR_TRACKER_TABLE_NAME
         })
     });
-    var result;
 
     if (!response.ok) {
         throw new Error('HTTP error ' + response.status);
@@ -50,190 +118,294 @@ async function fetchAPRTrackerRows() {
 
     result = await response.json();
     if (!result.success) {
-        throw new Error(result.error || 'Failed to load table data');
+        throw new Error(result.error || 'Failed to load APR tracker rows.');
     }
 
-    return result.rows || [];
+    return Array.isArray(result.rows) ? result.rows : [];
 }
 
-function getAPRTrackerTableBuilder() {
-    return APR_TRACKER_PAGE_STATE.table;
-}
-
+/*
+Function Name: getAPRTrackerDataTable
+Purpose: Return the current DataTables instance for the APR tracker page.
+Input Params: None
+Output: data_table (DataTable | null)
+*/
 function getAPRTrackerDataTable() {
-    var tableBuilder = getAPRTrackerTableBuilder();
-
-    if (!tableBuilder || !tableBuilder.getInstance()) {
+    if (!APR_TRACKER_PAGE.table || !APR_TRACKER_PAGE.table.getInstance) {
         return null;
     }
 
-    return tableBuilder.getInstance();
+    return APR_TRACKER_PAGE.table.getInstance();
 }
 
-function getAPRTrackerPresetSelect() {
-    return document.getElementById('presetSelect');
-}
-
-function getAPRTrackerSelectedPresetName() {
-    var presetSelect = getAPRTrackerPresetSelect();
-    return presetSelect ? presetSelect.value : 'default';
-}
-
-function applyAPRTrackerCurrentPreset() {
-    var tableBuilder = getAPRTrackerTableBuilder();
-
-    if (!tableBuilder) {
+/*
+Function Name: applyAPRTrackerSelectedPreset
+Purpose: Re-apply the selected preset to the current APR tracker table.
+Input Params: None
+Output: outputs (None)
+*/
+function applyAPRTrackerSelectedPreset() {
+    if (!APR_TRACKER_PAGE.table) {
         return;
     }
 
-    window.applyAPRTrackerPreset(tableBuilder, getAPRTrackerSelectedPresetName());
+    window.applyAPRTrackerPreset(APR_TRACKER_PAGE.table, getAPRTrackerSelectedPresetName());
 }
 
-function clearAPRTrackerColumnControlSearches(dt) {
+/*
+Function Name: clearAPRTrackerColumnControlSearches
+Purpose: Clear DataTables column-control searches no matter which plugin method is available.
+Input Params: dataTable (DataTable)
+Output: outputs (None)
+*/
+function clearAPRTrackerColumnControlSearches(dataTable) {
     if (
-        dt.columns &&
-        dt.columns().columnControl &&
-        typeof dt.columns().columnControl.searchClear === 'function'
+        dataTable.columns &&
+        dataTable.columns().columnControl &&
+        typeof dataTable.columns().columnControl.searchClear === 'function'
     ) {
-        dt.columns().columnControl.searchClear();
+        dataTable.columns().columnControl.searchClear();
         return;
     }
 
     if (
-        dt.columns &&
-        typeof dt.columns().ccSearchClear === 'function'
+        dataTable.columns &&
+        typeof dataTable.columns().ccSearchClear === 'function'
     ) {
-        dt.columns().ccSearchClear();
+        dataTable.columns().ccSearchClear();
     }
 }
 
-function clearAPRTrackerFilterInputs(wrapper) {
-    var inputs;
+/*
+Function Name: clearAPRTrackerFilterFields
+Purpose: Clear the text, number, date, and select fields inside the filter area.
+Input Params: container (HTMLElement | null)
+Output: outputs (None)
+*/
+function clearAPRTrackerFilterFields(container) {
+    var fields;
     var index;
-    var input;
+    var field;
 
-    if (!wrapper) {
+    if (!container) {
         return;
     }
 
-    inputs = wrapper.querySelectorAll('input');
-    for (index = 0; index < inputs.length; index += 1) {
-        input = inputs[index];
+    fields = container.querySelectorAll('input, select');
+    for (index = 0; index < fields.length; index += 1) {
+        field = fields[index];
+
+        if (field.tagName === 'SELECT') {
+            field.selectedIndex = 0;
+            continue;
+        }
+
         if (
-            input.type === 'search' ||
-            input.type === 'text' ||
-            input.type === 'number' ||
-            input.type === 'date'
+            field.type === 'search' ||
+            field.type === 'text' ||
+            field.type === 'number' ||
+            field.type === 'date'
         ) {
-            input.value = '';
+            field.value = '';
         }
     }
 }
 
-function clearAPRTrackerFilterSelects(wrapper) {
-    var selects;
-    var index;
+/*
+Function Name: clearAPRTrackerFilters
+Purpose: Clear every search box, state save, and preset filter applied to the table.
+Input Params: None
+Output: outputs (None)
+*/
+function clearAPRTrackerFilters() {
+    var dataTable = getAPRTrackerDataTable();
 
-    if (!wrapper) {
+    if (!dataTable) {
         return;
     }
 
-    selects = wrapper.querySelectorAll('select');
-    for (index = 0; index < selects.length; index += 1) {
-        selects[index].selectedIndex = 0;
-    }
-}
+    dataTable.search('');
+    dataTable.columns().search('');
+    clearAPRTrackerColumnControlSearches(dataTable);
 
-function clearAllAPRTrackerAppliedFilters() {
-    var dt = getAPRTrackerDataTable();
-    var wrapper;
-
-    if (!dt) {
-        return;
+    if (dataTable.state && typeof dataTable.state.clear === 'function') {
+        dataTable.state.clear();
     }
 
-    dt.search('');
-    dt.columns().search('');
-    clearAPRTrackerColumnControlSearches(dt);
-
-    if (dt.state && typeof dt.state.clear === 'function') {
-        dt.state.clear();
-    }
-
-    wrapper = dt.table().container();
-    clearAPRTrackerFilterInputs(wrapper);
-    clearAPRTrackerFilterSelects(wrapper);
-
-    dt.draw();
-    applyAPRTrackerCurrentPreset();
+    clearAPRTrackerFilterFields(dataTable.table().container());
+    dataTable.draw();
+    applyAPRTrackerSelectedPreset();
 }
 
-function handleAPRTrackerPresetChange() {
-    applyAPRTrackerCurrentPreset();
-}
-
-function handleAPRTrackerClearFiltersClick() {
-    clearAllAPRTrackerAppliedFilters();
-}
-
-async function reloadAPRTrackerTableRows() {
+/*
+Function Name: reloadAPRTrackerTable
+Purpose: Fetch fresh tracker rows from the database and rebuild the table.
+Input Params: None
+Output: outputs (Promise[None])
+*/
+async function reloadAPRTrackerTable() {
     var rows = await fetchAPRTrackerRows();
-    var tableBuilder = getAPRTrackerTableBuilder();
 
-    if (!tableBuilder) {
+    if (!APR_TRACKER_PAGE.table) {
         return;
     }
 
-    await tableBuilder.reload(rows);
-    applyAPRTrackerCurrentPreset();
+    await APR_TRACKER_PAGE.table.reload(rows);
+    applyAPRTrackerSelectedPreset();
 }
 
-function handleAPRTrackerPageError(error) {
+/*
+Function Name: showAPRTrackerPageError
+Purpose: Display one tracker-page error in both the console and a browser alert.
+Input Params: error (Error | any)
+Output: outputs (None)
+*/
+function showAPRTrackerPageError(error) {
     console.error(error);
-    alert(error.message);
+    alert(error && error.message ? error.message : 'Unexpected APR Tracker error.');
 }
 
-function handleAPRTrackerReloadClick() {
-    reloadAPRTrackerTableRows().catch(handleAPRTrackerPageError);
-}
-
-function handleAPRTrackerWatchlistManagerClick() {
+/*
+Function Name: openAPRTrackerWatchlistManager
+Purpose: Open the APR Watchlist Manager if that helper was registered on the page.
+Input Params: None
+Output: outputs (None)
+*/
+function openAPRTrackerWatchlistManager() {
     if (typeof window.openAprWatchlistManager === 'function') {
         window.openAprWatchlistManager();
     }
 }
 
+/*
+Function Name: bindAPRTrackerToolbar
+Purpose: Connect the toolbar controls to the preset, clear, watchlist, and reload actions.
+Input Params: None
+Output: outputs (None)
+*/
 function bindAPRTrackerToolbar() {
-    var presetSelect = getAPRTrackerPresetSelect();
-    var clearFiltersButton = document.getElementById('clearFiltersBtn');
-    var watchlistManagerButton = document.getElementById('watchlistManagerBtn');
-    var reloadButton = document.getElementById('reloadTableBtn');
+    var presetSelect = getAPRTrackerElement('presetSelect');
+    var clearFiltersButton = getAPRTrackerElement('clearFiltersBtn');
+    var watchlistManagerButton = getAPRTrackerElement('watchlistManagerBtn');
+    var reloadButton = getAPRTrackerElement('reloadTableBtn');
 
-    if (presetSelect && !presetSelect._aprBound) {
-        presetSelect.addEventListener('change', handleAPRTrackerPresetChange);
-        presetSelect._aprBound = true;
+    if (presetSelect) {
+        presetSelect.onchange = applyAPRTrackerSelectedPreset;
     }
 
-    if (clearFiltersButton && !clearFiltersButton._aprBound) {
-        clearFiltersButton.addEventListener('click', handleAPRTrackerClearFiltersClick);
-        clearFiltersButton._aprBound = true;
+    if (clearFiltersButton) {
+        clearFiltersButton.onclick = clearAPRTrackerFilters;
     }
 
-    if (watchlistManagerButton && !watchlistManagerButton._aprBound) {
-        watchlistManagerButton.addEventListener('click', handleAPRTrackerWatchlistManagerClick);
-        watchlistManagerButton._aprBound = true;
+    if (watchlistManagerButton) {
+        watchlistManagerButton.onclick = openAPRTrackerWatchlistManager;
     }
 
-    if (reloadButton && !reloadButton._aprBound) {
-        reloadButton.addEventListener('click', handleAPRTrackerReloadClick);
-        reloadButton._aprBound = true;
+    if (reloadButton) {
+        reloadButton.onclick = handleAPRTrackerReloadClick;
     }
 }
 
-function handleAPRTrackerTableAfterInit(dt, builder) {
-    window.bindAPRActionEvents(builder);
+/*
+Function Name: handleAPRTrackerReloadClick
+Purpose: Reload the APR tracker rows when the toolbar Reload button is pressed.
+Input Params: None
+Output: outputs (None)
+*/
+function handleAPRTrackerReloadClick() {
+    reloadAPRTrackerTable().catch(showAPRTrackerPageError);
 }
 
+/*
+Function Name: showAPRTrackerCellValue
+Purpose: Show the full value for one truncated tracker cell.
+Input Params: trigger (HTMLElement | null)
+Output: outputs (None)
+*/
+function showAPRTrackerCellValue(trigger) {
+    var value = trigger ? trigger.getAttribute('data-apr-full-value') || '' : '';
+
+    if (value) {
+        alert(value);
+    }
+}
+
+/*
+Function Name: handleAPRTrackerTableClick
+Purpose: Show the full tracker value when a truncated table cell is clicked.
+Input Params: event (MouseEvent)
+Output: outputs (None)
+*/
+function handleAPRTrackerTableClick(event) {
+    var trigger = event.target.closest('.apr-tracker-cell-trigger');
+
+    if (trigger) {
+        showAPRTrackerCellValue(trigger);
+    }
+}
+
+/*
+Function Name: handleAPRTrackerTableKeyDown
+Purpose: Show the full tracker value when a truncated table cell is opened with the keyboard.
+Input Params: event (KeyboardEvent)
+Output: outputs (None)
+*/
+function handleAPRTrackerTableKeyDown(event) {
+    var trigger;
+
+    if (event.key !== 'Enter' && event.key !== ' ') {
+        return;
+    }
+
+    trigger = event.target.closest('.apr-tracker-cell-trigger');
+    if (!trigger) {
+        return;
+    }
+
+    event.preventDefault();
+    showAPRTrackerCellValue(trigger);
+}
+
+/*
+Function Name: bindAPRTrackerTableExtras
+Purpose: Attach the action-button handler and full-cell-value handler to the APR tracker table.
+Input Params: tableBuilder (TableBuilder)
+Output: outputs (None)
+*/
+function bindAPRTrackerTableExtras(tableBuilder) {
+    var tableElement = document.querySelector(tableBuilder.selector);
+
+    if (!tableElement) {
+        return;
+    }
+
+    window.bindAPRActionEvents(tableBuilder);
+
+    if (tableElement._aprTrackerExtrasBound) {
+        return;
+    }
+
+    tableElement.addEventListener('click', handleAPRTrackerTableClick);
+    tableElement.addEventListener('keydown', handleAPRTrackerTableKeyDown);
+    tableElement._aprTrackerExtrasBound = true;
+}
+
+/*
+Function Name: handleAPRTrackerTableAfterInit
+Purpose: Run the last setup steps after DataTables finishes creating the APR tracker table.
+Input Params: dataTable (DataTable), tableBuilder (TableBuilder)
+Output: outputs (None)
+*/
+function handleAPRTrackerTableAfterInit(dataTable, tableBuilder) {
+    bindAPRTrackerTableExtras(tableBuilder);
+}
+
+/*
+Function Name: createAPRTrackerTable
+Purpose: Build the TableBuilder config for the APR tracker page.
+Input Params: rows (list[dict])
+Output: table_builder (TableBuilder)
+*/
 function createAPRTrackerTable(rows) {
     return new TableBuilder({
         selector: '#aprTrackerTable',
@@ -259,9 +431,9 @@ function createAPRTrackerTable(rows) {
                 left: 2
             },
             columnDefs: window.getAPRTrackerColumnDefs(
-                getAPRTrackerListDropdownConfig(),
-                getAPRTrackerDateDropdownConfig(),
-                getAPRTrackerFloatDropdownConfig()
+                buildAPRTrackerDropdownConfig('searchList'),
+                buildAPRTrackerDropdownConfig('searchDateTime'),
+                buildAPRTrackerDropdownConfig('searchNumber')
             )
         },
         extensions: {
@@ -270,17 +442,33 @@ function createAPRTrackerTable(rows) {
     });
 }
 
+/*
+Function Name: initAPRTracker
+Purpose: Load the session project code, read the APR database, render the table, and bind the toolbar.
+Input Params: None
+Output: outputs (Promise[None])
+*/
 async function initAPRTracker() {
-    var rows = await fetchAPRTrackerRows();
+    var rows;
 
-    APR_TRACKER_PAGE_STATE.table = createAPRTrackerTable(rows);
-    await APR_TRACKER_PAGE_STATE.table.render();
+    APR_TRACKER_PAGE.projectCode = await loadAPRTrackerProjectCode();
+    APR_TRACKER_PAGE.dbPath = buildAPRTrackerDbPath(APR_TRACKER_PAGE.projectCode);
+    rows = await fetchAPRTrackerRows();
+
+    APR_TRACKER_PAGE.table = createAPRTrackerTable(rows);
+    await APR_TRACKER_PAGE.table.render();
     bindAPRTrackerToolbar();
-    window.applyAPRTrackerPreset(APR_TRACKER_PAGE_STATE.table, 'default');
+    applyAPRTrackerSelectedPreset();
 }
 
-function handleAPRTrackerDOMContentLoaded() {
-    initAPRTracker().catch(handleAPRTrackerPageError);
+/*
+Function Name: startAPRTrackerPage
+Purpose: Start the APR tracker page when the browser finishes loading the HTML.
+Input Params: None
+Output: outputs (None)
+*/
+function startAPRTrackerPage() {
+    initAPRTracker().catch(showAPRTrackerPageError);
 }
 
-document.addEventListener('DOMContentLoaded', handleAPRTrackerDOMContentLoaded);
+document.addEventListener('DOMContentLoaded', startAPRTrackerPage);

@@ -120,7 +120,7 @@ def ensure_force_extract_file(force_extract_file):
     write_json_file(absolute_force_extract_file, APR_VARS.make_force_extract_template())
 
 
-def get_run_directories(base_path):
+def get_run_directories(base_path, context=None):
     """
     Function Name: get_run_directories
     Purpose: Discover APR run directories under IMP that match the configured flow/tool marker and depth rules.
@@ -137,6 +137,9 @@ def get_run_directories(base_path):
     run_directories = []
 
     for root, dirs, _files in os.walk(absolute_base_path):
+        if context is not None and APR_SLEEP.should_exit(context):
+            break
+
         root_path = Path(root)
         depth = len(root_path.parts) - base_depth
         if depth > int(settings["DEFAULT_MAXDEPTH"]):
@@ -154,7 +157,7 @@ def get_run_directories(base_path):
     return sorted(set(run_directories))
 
 
-def get_log_paths(base_path):
+def get_log_paths(base_path, context=None):
     """
     Function Name: get_log_paths
     Purpose: Build the absolute list of APR stage log files that currently exist in the discovered run directories.
@@ -163,7 +166,9 @@ def get_log_paths(base_path):
     """
     stage_names = list(APR_VARS.get_setting("STAGES", []))
     paths = set()
-    for run_dir in get_run_directories(base_path):
+    for run_dir in get_run_directories(base_path, context):
+        if context is not None and APR_SLEEP.should_exit(context):
+            break
         for stage_name in stage_names:
             path = os.path.abspath(os.path.join(run_dir, "logs", f"{stage_name}.log"))
             if os.path.exists(path):
@@ -202,7 +207,7 @@ def get_monitor_items(context):
 
     project_imp_dir = os.path.abspath(str(Path(runtime_paths["settings"]["PROJECTS_BASE_DIR"]) / context["project_code"] / "IMP"))
     monitor_items = []
-    for log_path in get_log_paths(project_imp_dir):
+    for log_path in get_log_paths(project_imp_dir, context):
         log_meta = APR_ITEM_STATUS.parse_log_args(log_path)
         state_key = log_meta["State_key"]
         monitor_items.append(

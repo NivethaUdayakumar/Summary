@@ -24,7 +24,15 @@ def request_stop(*_args):
     Input Params: _args (tuple)
     Output: outputs (None)
     """
+    if STOP_REQUESTED["value"]:
+        return
+
     STOP_REQUESTED["value"] = True
+
+    # Exit the active monitor loop immediately so FLOW_MONITOR.main() reaches
+    # its finally block and runs close_context() in the live monitor process.
+    if _args:
+        raise SystemExit(0)
 
 
 def install_signal_handlers():
