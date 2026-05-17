@@ -48,9 +48,13 @@ def get_runtime_paths(context):
     force_extract_file = Path(os.path.abspath(str(dashai_dir / settings["FORCE_EXTRACT_FILE_NAME"])))
     state_file = Path(os.path.abspath(str(state_dir / settings["STATE_FILE_NAME"])))
     log_file = Path(os.path.abspath(str(log_dir / APR_VARS.today_log_file())))
-    timing_script = Path(os.path.abspath(str(Path(__file__).resolve().parents[1] / "EXTRACTORS" / "APR_TIMING_INNOVUS.py")))
+    extractors_dir = Path(os.path.abspath(str(Path(__file__).resolve().parents[1] / "EXTRACTORS")))
+    timing_script = Path(os.path.abspath(str(extractors_dir / "APR_TIMING_INNOVUS.py")))
+    batch_commands_dir = Path(os.path.abspath(str(extractors_dir / "BATCH_COMMANDS")))
     return {
+        "batch_commands_dir": batch_commands_dir,
         "dashai_dir": dashai_dir,
+        "extractors_dir": extractors_dir,
         "force_extract_file": force_extract_file,
         "log_dir": log_dir,
         "log_file": log_file,
@@ -72,6 +76,7 @@ def refresh_runtime_context(context):
     runtime_paths["dashai_dir"].mkdir(parents=True, exist_ok=True)
     runtime_paths["state_dir"].mkdir(parents=True, exist_ok=True)
     runtime_paths["log_dir"].mkdir(parents=True, exist_ok=True)
+    runtime_paths["batch_commands_dir"].mkdir(parents=True, exist_ok=True)
 
     ensure_force_extract_file(runtime_paths["force_extract_file"])
     APR_UPDATE_LOG.ensure_logger(context, runtime_paths["log_file"])

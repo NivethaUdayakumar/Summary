@@ -13,13 +13,19 @@ APR Monitoring Process
 11. Runs in "Await Extraction" are queued into the batch runtime owned by APR_STATUS_ACTION.
 12. Pending runs are grouped into batches of APR_VARS.BATCH_SIZE.
 13. At most APR_VARS.MAX_PARALLEL_BATCHES batch subprocesses run at the same time.
-14. If there are no running batches and the pending queue does not reach BATCH_SIZE within APR_VARS.BATCH_RUN_WAIT_TIME seconds, the current pending count is launched as a short batch.
-15. Each batch command is launched in the required format:
-    module load Python3/3.11.1 && utilq -Is Python3 <abs_path_to_APR_TIMING_INNOVUS.py> <project_code> <stage> <run_dir> && Python3 <abs_path_to_APR_TIMING_INNOVUS.py> <project_code> <stage> <run_dir> && ...
-16. When a batch is submitted, all its runs are marked as "Extracting" in memory/state and one batch submission log line is written.
-17. When a batch completes, the monitor checks which DashAI timing DB files were written after submit time.
-18. Successful runs move to "Completed"; the first missing run becomes "Extraction Failed"; later missing runs are returned to "Await Extraction" for retry.
-19. APR_UPDATE_TRACKER applies KPI extraction from EXTRACTORS/APR_KPI_EXTRACT.py and submits tracker rows to SQLite.
-20. APR_DB_ACTIONS refreshes tracker schema dynamically, so new KPI columns can be added while the monitor is running. Existing rows keep blank values for new text columns until updated.
-21. Completed force-extract requests are removed from the JSON file after extraction finishes.
-22. APR_UPDATE_LOG only writes batch-level log lines: submitted count, completed count, success count, and failed count.
+14. If the pending queue does not reach BATCH_SIZE within APR_VARS.BATCH_RUN_WAIT_TIME seconds, the current pending count is launched as a short batch in any free parallel slot.
+15. The monitor manages EXTRACTORS/BATCH_COMMANDS so it contains one batch command file per configured parallel batch slot.
+16. When the parallel-batch count is initialized or safely reset with no active batches, existing managed batch command files are deleted and recreated.
+17. Each submitted batch rewrites one slot file, for example EXTRACTORS/BATCH_COMMANDS/BATCH_COMMAND_1.txt, so line 1 is:
+    module load Python3/3.11.1
+    and each remaining line is one extractor command:
+    python3 <abs_path_to_APR_TIMING_INNOVUS.py> <project_code> <stage> <run_dir>
+    subprocess.Popen then launches:
+    utilq -Is source <abs_path_to_slot_batch_file>
+18. When a batch is submitted, all its runs are marked as "Extracting" in memory/state and one batch submission log line is written.
+19. When a batch completes, the monitor checks which DashAI timing DB files were written after submit time.
+20. Successful runs move to "Completed"; the first missing run becomes "Extraction Failed"; later missing runs are returned to "Await Extraction" for retry.
+21. APR_UPDATE_TRACKER applies KPI extraction from EXTRACTORS/APR_KPI_EXTRACT.py and submits tracker rows to SQLite.
+22. APR_DB_ACTIONS refreshes tracker schema dynamically, so new KPI columns can be added while the monitor is running. Existing rows keep blank values for new text columns until updated.
+23. Completed force-extract requests are removed from the JSON file after extraction finishes.
+24. APR_UPDATE_LOG only writes batch-level log lines: submitted count, completed count, success count, and failed count.

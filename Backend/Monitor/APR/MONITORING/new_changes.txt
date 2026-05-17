@@ -1,0 +1,16 @@
+APR per-batch command file changes
+
+| File | Functions Changed | What Changed |
+| --- | --- | --- |
+| `Backend/Monitor/APR/MONITORING/APR_MONITOR_ITEMS.py` | `get_runtime_paths()`, `refresh_runtime_context()` | Replaced the single `BATCH_FILES.txt` runtime path with the `EXTRACTORS/BATCH_COMMANDS` directory path and ensured that folder exists every monitor cycle. |
+| `Backend/Monitor/APR/MONITORING/APR_STATUS_ACTION.py` | `_get_runtime()`, `reconcile_batches()`, `shutdown_runtime()`, `_dispatch_ready_batches()` | Added slot tracking for parallel batch files, released slot files after completion, reset the managed command-file pool based on `MAX_PARALLEL_BATCHES`, and allowed short batches to launch after `BATCH_RUN_WAIT_TIME` whenever a parallel slot is free. |
+| `Backend/Monitor/APR/MONITORING/APR_STATUS_ACTION.py` | `_submit_batch()`, `_requeue_batch_items()`, `_claim_batch_slot()`, `_release_batch_slot()`, `_get_batch_command_file_path()` | Changed batch submission to claim one dedicated file per batch job from `EXTRACTORS/BATCH_COMMANDS`, submit that file through `utilq`, and return the slot when the batch finishes or submit fails. |
+| `Backend/Monitor/APR/MONITORING/APR_STATUS_ACTION.py` | `_sync_batch_command_slots()`, `_reset_batch_command_files()` | Added the logic that deletes old managed batch command files and recreates exactly one file per configured parallel batch slot. |
+| `Backend/Monitor/APR/MONITORING/APR_STATUS_ACTION.py` | `_build_batch_file_lines()`, `_write_batch_file()`, `_build_batch_command()` | Updated the batch file writer and submit command builder so each slot file contains the module-load line plus one `python3` command per queued run, then launches `utilq -Is source <slot_file>`. |
+
+Non-function file updates
+
+| File | Change |
+| --- | --- |
+| `Backend/Monitor/APR/EXTRACTORS/BATCH_FILES.txt` | Updated the note to explain that runtime batch files are now created dynamically in `EXTRACTORS/BATCH_COMMANDS`. |
+| `Backend/Monitor/APR/monitor_working.txt` | Updated the flow notes to describe per-slot batch files in `BATCH_COMMANDS` and their `utilq` submission flow. |

@@ -17,7 +17,7 @@ from Backend.Monitor.APR.MONITORING import APR_UPDATE_LOG
 _BATCH_RUNTIMES = {}
 _VALIDATION_RESULT_PREFIX = "validation_failed:"
 _BATCH_PYTHON_MODULE = "Python3/3.11.1"
-_BATCH_PYTHON_COMMAND = "Python3"
+_BATCH_PYTHON_COMMAND = "python3"
 
 
 def _get_runtime(context):
@@ -31,6 +31,9 @@ def _get_runtime(context):
     runtime = _BATCH_RUNTIMES.get(project_code)
     if runtime is None:
         runtime = {
+            "available_batch_slots": [],
+            "batch_slots_initialized": False,
+            "configured_parallel_batch_count": 0,
             "next_batch_id": 1,
             "pending_items": OrderedDict(),
             "running_batches": {},
@@ -118,6 +121,7 @@ def reconcile_batches(context, state):
             continue
 
         runtime["running_batches"].pop(batch_id, None)
+        _release_batch_slot(runtime, batch_info.get("slot_index"))
         result = _finalize_batch(state, batch_info, return_code)
         state_dirty = state_dirty or result["state_dirty"]
         completed_force_keys.update(result["completed_force_keys"])
@@ -189,6 +193,12 @@ def shutdown_runtime(context, state):
 
     runtime["running_batches"].clear()
     runtime["pending_items"].clear()
+    _sync_batch_command_slots(
+        context,
+        runtime,
+        max(1, int(APR_VARS.get_runtime_settings()["MAX_PARALLEL_BATCHES"])),
+        force_reset=True,
+    )
     _BATCH_RUNTIMES.pop(context["project_code"], None)
     return state_dirty
 
@@ -239,6 +249,7 @@ def _dispatch_ready_batches(context):
     batch_size = max(1, int(settings["BATCH_SIZE"]))
     max_parallel_batches = max(1, int(settings["MAX_PARALLEL_BATCHES"]))
     batch_wait_time = max(0, int(settings["BATCH_RUN_WAIT_TIME"]))
+    _sync_batch_command_slots(context, runtime, max_parallel_batches)
 
     while len(runtime["running_batches"]) < max_parallel_batches:
         pending_count = len(runtime["pending_items"])
@@ -247,8 +258,6 @@ def _dispatch_ready_batches(context):
 
         if pending_count >= batch_size:
             item_count = batch_size
-        elif runtime["running_batches"]:
-            return
         else:
             oldest_item = next(iter(runtime["pending_items"].values()))
             if time.time() - oldest_item["queued_at"] < batch_wait_time:
@@ -270,22 +279,31 @@ def _submit_batch(context, runtime, batch_items):
     batch_id = f"{context['project_code']}-{runtime['next_batch_id']}"
     runtime["next_batch_id"] += 1
 
-    command_text = _build_batch_command(context, batch_items)
+    max_parallel_batches = max(1, int(APR_VARS.get_runtime_settings()["MAX_PARALLEL_BATCHES"]))
+    slot_index = _claim_batch_slot(context, runtime, max_parallel_batches)
+    if slot_index is None:
+        _requeue_batch_items(runtime, batch_items)
+        return False
+
+    batch_file_path = _get_batch_command_file_path(context["runtime_paths"]["batch_commands_dir"], slot_index)
+    command_text = _build_batch_command(batch_file_path)
     submitted_at = time.time()
     try:
+        _write_batch_file(batch_file_path, _build_batch_file_lines(context, batch_items))
         process = _spawn_batch_process(command_text)
     except Exception:
-        for batch_item in reversed(batch_items):
-            batch_item["queued_at"] = time.time()
-            runtime["pending_items"][batch_item["state_key"]] = batch_item
+        _release_batch_slot(runtime, slot_index)
+        _requeue_batch_items(runtime, batch_items)
         APR_UPDATE_LOG.log_batch_completion(context, batch_id, len(batch_items), 0, len(batch_items))
         return False
 
     batch_info = {
         "batch_id": batch_id,
+        "batch_file_path": batch_file_path,
         "command_text": command_text,
         "items": batch_items,
         "process": process,
+        "slot_index": slot_index,
         "state_keys": {batch_item["state_key"] for batch_item in batch_items},
         "submitted_at": submitted_at,
         "terminated": False,
@@ -297,17 +315,17 @@ def _submit_batch(context, runtime, batch_items):
     return True
 
 
-def _build_batch_command(context, batch_items):
+def _build_batch_file_lines(context, batch_items):
     """
-    Function Name: _build_batch_command
-    Purpose: Build the APR batch shell command in the required module-load plus utilq chained extractor-command format.
+    Function Name: _build_batch_file_lines
+    Purpose: Build one batch command file with the required module-load header and one timing extractor command per queued APR run.
     Input Params: context (dict), batch_items (list[dict])
-    Output: command_text (str)
+    Output: batch_file_lines (list[str])
     """
     timing_script = os.path.abspath(str(context["runtime_paths"]["timing_script"]))
-    command_parts = []
+    batch_file_lines = [f"module load {_BATCH_PYTHON_MODULE}"]
     for batch_item in batch_items:
-        command_parts.append(
+        batch_file_lines.append(
             " ".join(
                 [
                     _BATCH_PYTHON_COMMAND,
@@ -318,15 +336,142 @@ def _build_batch_command(context, batch_items):
                 ]
             )
         )
-    if not command_parts:
-        return f"module load {_BATCH_PYTHON_MODULE}"
+    return batch_file_lines
 
-    return " && ".join(
-        [
-            f"module load {_BATCH_PYTHON_MODULE}",
-            f"utilq -Is {command_parts[0]}",
-        ] + command_parts[1:]
-    )
+
+def _requeue_batch_items(runtime, batch_items):
+    """
+    Function Name: _requeue_batch_items
+    Purpose: Put one batch's items back at the front of the pending queue after submission could not start.
+    Input Params: runtime (dict), batch_items (list[dict])
+    Output: outputs (None)
+    """
+    for batch_item in reversed(batch_items):
+        batch_item["queued_at"] = time.time()
+        runtime["pending_items"][batch_item["state_key"]] = batch_item
+        runtime["pending_items"].move_to_end(batch_item["state_key"], last=False)
+
+
+def _sync_batch_command_slots(context, runtime, max_parallel_batches, force_reset=False):
+    """
+    Function Name: _sync_batch_command_slots
+    Purpose: Rebuild the managed batch-command files so `BATCH_COMMANDS` contains one slot file per configured parallel batch when it is safe to do so.
+    Input Params: context (dict), runtime (dict), max_parallel_batches (int), force_reset (bool)
+    Output: outputs (None)
+    """
+    batch_commands_dir = context.get("runtime_paths", {}).get("batch_commands_dir")
+    if batch_commands_dir is None:
+        return
+
+    if runtime["running_batches"] and not force_reset:
+        if runtime.get("configured_parallel_batch_count") == max_parallel_batches and runtime.get("batch_slots_initialized"):
+            return
+        return
+
+    absolute_batch_commands_dir = Path(os.path.abspath(str(batch_commands_dir)))
+    managed_batch_file_count = len(list(absolute_batch_commands_dir.glob("BATCH_COMMAND_*.txt")))
+    if (
+        not force_reset
+        and runtime.get("configured_parallel_batch_count") == max_parallel_batches
+        and runtime.get("batch_slots_initialized")
+        and managed_batch_file_count == max_parallel_batches
+    ):
+        return
+
+    _reset_batch_command_files(absolute_batch_commands_dir, max_parallel_batches)
+    runtime["available_batch_slots"] = list(range(1, max_parallel_batches + 1))
+    runtime["batch_slots_initialized"] = True
+    runtime["configured_parallel_batch_count"] = max_parallel_batches
+
+
+def _reset_batch_command_files(batch_commands_dir, max_parallel_batches):
+    """
+    Function Name: _reset_batch_command_files
+    Purpose: Delete managed batch-command files and recreate exactly one command file per configured parallel batch slot.
+    Input Params: batch_commands_dir (str | os.PathLike), max_parallel_batches (int)
+    Output: outputs (None)
+    """
+    absolute_batch_commands_dir = Path(os.path.abspath(str(batch_commands_dir)))
+    absolute_batch_commands_dir.mkdir(parents=True, exist_ok=True)
+
+    for existing_batch_file in absolute_batch_commands_dir.glob("BATCH_COMMAND_*.txt"):
+        try:
+            existing_batch_file.unlink()
+        except FileNotFoundError:
+            pass
+
+    for slot_index in range(1, max_parallel_batches + 1):
+        _write_batch_file(
+            _get_batch_command_file_path(absolute_batch_commands_dir, slot_index),
+            [f"module load {_BATCH_PYTHON_MODULE}"],
+        )
+
+
+def _claim_batch_slot(context, runtime, max_parallel_batches):
+    """
+    Function Name: _claim_batch_slot
+    Purpose: Reserve one available batch-command slot file for a new APR batch submission.
+    Input Params: context (dict), runtime (dict), max_parallel_batches (int)
+    Output: slot_index (int | None)
+    """
+    _sync_batch_command_slots(context, runtime, max_parallel_batches)
+    if not runtime["available_batch_slots"]:
+        return None
+    return runtime["available_batch_slots"].pop(0)
+
+
+def _release_batch_slot(runtime, slot_index):
+    """
+    Function Name: _release_batch_slot
+    Purpose: Return one batch-command slot file back to the available pool after its batch finishes or fails to submit.
+    Input Params: runtime (dict), slot_index (int | None)
+    Output: outputs (None)
+    """
+    if slot_index is None:
+        return
+    if slot_index in runtime["available_batch_slots"]:
+        return
+    runtime["available_batch_slots"].append(slot_index)
+    runtime["available_batch_slots"].sort()
+
+
+def _get_batch_command_file_path(batch_commands_dir, slot_index):
+    """
+    Function Name: _get_batch_command_file_path
+    Purpose: Build the absolute managed command-file path for one parallel APR batch slot.
+    Input Params: batch_commands_dir (str | os.PathLike), slot_index (int)
+    Output: batch_file_path (str)
+    """
+    absolute_batch_commands_dir = Path(os.path.abspath(str(batch_commands_dir)))
+    return str(absolute_batch_commands_dir / f"BATCH_COMMAND_{slot_index}.txt")
+
+
+def _write_batch_file(batch_file_path, batch_file_lines):
+    """
+    Function Name: _write_batch_file
+    Purpose: Atomically rewrite one managed APR batch-command file before its matching batch is submitted through utilq.
+    Input Params: batch_file_path (str), batch_file_lines (list[str])
+    Output: outputs (None)
+    """
+    absolute_batch_file_path = Path(os.path.abspath(str(batch_file_path)))
+    absolute_batch_file_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_batch_file_path = absolute_batch_file_path.with_name(f"{absolute_batch_file_path.name}.tmp")
+    with open(temp_batch_file_path, "w", encoding="utf-8", newline="\n") as output_file:
+        output_file.write("\n".join(batch_file_lines).rstrip())
+        output_file.write("\n")
+        output_file.flush()
+        os.fsync(output_file.fileno())
+    os.replace(temp_batch_file_path, absolute_batch_file_path)
+
+
+def _build_batch_command(batch_file_path):
+    """
+    Function Name: _build_batch_command
+    Purpose: Build the APR batch shell command that submits one prepared slot command file through utilq.
+    Input Params: batch_file_path (str)
+    Output: command_text (str)
+    """
+    return f"utilq -Is source {shlex.quote(os.path.abspath(str(batch_file_path)))}"
 
 
 def _spawn_batch_process(command_text):

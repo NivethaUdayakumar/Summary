@@ -1,0 +1,7 @@
+# Batch command files are now created dynamically in EXTRACTORS/BATCH_COMMANDS.
+# One file is reserved per parallel batch slot, for example:
+#   EXTRACTORS/BATCH_COMMANDS/BATCH_COMMAND_1.txt
+#   EXTRACTORS/BATCH_COMMANDS/BATCH_COMMAND_2.txt
+# Each generated file contains:
+#   module load Python3/3.11.1
+#   python3 <abs_path_to_APR_TIMING_INNOVUS.py> <project_code> <stage> <run_dir>
