@@ -82,7 +82,9 @@ def get_validation_error_code(state_entry):
         return ""
 
     error_code = last_extract_result[len(_VALIDATION_RESULT_PREFIX) :].strip().upper()
-    return error_code if error_code in {"ERR001", "ERR002"} else ""
+    if error_code == "ERR001" and state_entry.get("Last_status") == APR_VARS.get_setting("STATE_EXTRACT_FAILED"):
+        return "ERR003"
+    return error_code if error_code in {"ERR001", "ERR002", "ERR003"} else ""
 
 
 def check_valid_job(file_item):
@@ -99,7 +101,7 @@ def check_valid_job(file_item):
     run_dir = os.path.abspath(str(Path(log_path).resolve().parent.parent))
     timing_report_paths = get_timing_report_paths(run_dir, file_item["log_meta"]["Stage"])
     if not timing_report_paths:
-        return "ERR001"
+        return "ERR003"
 
     return ""
 
@@ -116,19 +118,23 @@ def reconcile_batches(context, state):
     completed_force_keys = set()
 
     for batch_id, batch_info in list(runtime["running_batches"].items()):
+        progress_result = _finalize_ready_batch_items(context, state, batch_info)
+        state_dirty = state_dirty or progress_result["state_dirty"]
+        completed_force_keys.update(progress_result["completed_force_keys"])
+
         return_code = batch_info["process"].poll()
         if return_code is None:
             continue
 
         runtime["running_batches"].pop(batch_id, None)
         _release_batch_slot(runtime, batch_info.get("slot_index"))
-        result = _finalize_batch(state, batch_info, return_code)
+        result = _finalize_batch(context, state, batch_info, return_code)
         state_dirty = state_dirty or result["state_dirty"]
         completed_force_keys.update(result["completed_force_keys"])
         APR_UPDATE_LOG.log_batch_completion(
             context,
             batch_id,
-            len(batch_info["items"]),
+            batch_info["item_count"],
             result["success_count"],
             result["failed_count"],
         )
@@ -184,11 +190,13 @@ def shutdown_runtime(context, state):
     for batch_info in list(runtime["running_batches"].values()):
         _terminate_batch_process(batch_info["process"])
         for batch_item in batch_info["items"]:
-            _set_await_state(state, batch_item, "terminated")
+            state_entry = _set_await_state(state, batch_item, "terminated")
+            _push_batch_item_tracker_state(context, batch_item, state_entry)
             state_dirty = True
 
     for batch_item in list(runtime["pending_items"].values()):
-        _set_await_state(state, batch_item, "pending")
+        state_entry = _set_await_state(state, batch_item, "pending")
+        _push_batch_item_tracker_state(context, batch_item, state_entry)
         state_dirty = True
 
     runtime["running_batches"].clear()
@@ -213,6 +221,7 @@ def _build_batch_item(context, file_item):
     log_meta = file_item["log_meta"]
     return {
         "queued_at": time.time(),
+        "log_meta": dict(log_meta),
         "log_mtime": file_item["file_info"]["mtime"],
         "log_path": os.path.abspath(file_item["log_path"]),
         "run_dir": os.path.abspath(str(Path(file_item["log_path"]).resolve().parent.parent)),
@@ -301,11 +310,13 @@ def _submit_batch(context, runtime, batch_items):
         "batch_id": batch_id,
         "batch_file_path": batch_file_path,
         "command_text": command_text,
+        "item_count": len(batch_items),
         "items": batch_items,
         "process": process,
         "slot_index": slot_index,
         "state_keys": {batch_item["state_key"] for batch_item in batch_items},
         "submitted_at": submitted_at,
+        "success_count": 0,
         "terminated": False,
     }
     runtime["running_batches"][batch_id] = batch_info
@@ -510,6 +521,7 @@ def _mark_batch_items_extracting(context, batch_items):
         state_entry["Force_extract"] = 0
         state_entry["Last_status"] = state_extracting
         state[batch_item["state_key"]] = state_entry
+        _push_batch_item_tracker_state(context, batch_item, state_entry)
     context["state_dirty"] = True
 
 
@@ -521,8 +533,9 @@ def _mark_file_item_invalid(context, file_item, error_code):
     Output: outputs (None)
     """
     status_by_error = {
-        "ERR001": APR_VARS.get_setting("STATE_EXTRACT_FAILED"),
+        "ERR001": APR_VARS.get_setting("STATE_FAILED"),
         "ERR002": APR_VARS.get_setting("STATE_FAILED"),
+        "ERR003": APR_VARS.get_setting("STATE_EXTRACT_FAILED"),
     }
     status = status_by_error.get(error_code, APR_VARS.get_setting("STATE_FAILED"))
     completed_at = APR_VARS.now_str()
@@ -600,11 +613,73 @@ def _remove_pending_item(context, state_key):
     _get_runtime(context)["pending_items"].pop(state_key, None)
 
 
-def _finalize_batch(state, batch_info, return_code):
+def _push_batch_item_tracker_state(context, batch_item, state_entry):
+    """
+    Function Name: _push_batch_item_tracker_state
+    Purpose: Submit one batch-owned tracker row immediately so queued, extracting, completed, and retry states show up without waiting for another file scan pass.
+    Input Params: context (dict), batch_item (dict), state_entry (dict)
+    Output: outputs (None)
+    """
+    writer = context.get("writer")
+    if writer is None:
+        return
+
+    from Backend.Monitor.APR.MONITORING import APR_ITEM_STATUS, APR_UPDATE_TRACKER
+
+    writer.check()
+    tracker_record = APR_ITEM_STATUS.build_record(
+        batch_item["log_path"],
+        state_entry.get("Created", APR_VARS.now_str()),
+        batch_item.get("log_meta"),
+        APR_ITEM_STATUS.get_file_info(batch_item["log_path"]),
+    )
+    tracker_record["Rerun"] = int(state_entry.get("Rerun", 0) or 0)
+    tracker_record["Status"] = state_entry.get("Last_status", APR_VARS.get_setting("STATE_AWAIT"))
+    writer.submit_tracker(APR_UPDATE_TRACKER.apply_kpi_status(tracker_record, batch_item["log_path"], state_entry))
+
+
+def _finalize_ready_batch_items(context, state, batch_info):
+    """
+    Function Name: _finalize_ready_batch_items
+    Purpose: Promote any still-running batch items to completed as soon as their timing databases exist, without waiting for the whole batch process to exit.
+    Input Params: context (dict), state (dict), batch_info (dict)
+    Output: result (dict)
+    """
+    ready_items = []
+    remaining_items = []
+    for batch_item in batch_info["items"]:
+        if _db_was_written_after_submit(batch_item["timing_db_path"], batch_info["submitted_at"]):
+            ready_items.append(batch_item)
+        else:
+            remaining_items.append(batch_item)
+
+    if not ready_items:
+        return {
+            "completed_force_keys": set(),
+            "state_dirty": False,
+        }
+
+    completed_at = APR_VARS.now_str()
+    completed_force_keys = set()
+    for batch_item in ready_items:
+        state_entry = _set_success_state(state, batch_item, completed_at)
+        _push_batch_item_tracker_state(context, batch_item, state_entry)
+        completed_force_keys.add(batch_item["state_key"])
+
+    batch_info["items"] = remaining_items
+    batch_info["state_keys"] = {batch_item["state_key"] for batch_item in remaining_items}
+    batch_info["success_count"] = int(batch_info.get("success_count", 0)) + len(ready_items)
+    return {
+        "completed_force_keys": completed_force_keys,
+        "state_dirty": True,
+    }
+
+
+def _finalize_batch(context, state, batch_info, return_code):
     """
     Function Name: _finalize_batch
     Purpose: Translate a finished APR batch result into success, failure, and retry state updates.
-    Input Params: state (dict), batch_info (dict), return_code (int)
+    Input Params: context (dict), state (dict), batch_info (dict), return_code (int)
     Output: result (dict)
     """
     completed_at = APR_VARS.now_str()
@@ -613,21 +688,24 @@ def _finalize_batch(state, batch_info, return_code):
     state_dirty = False
 
     for batch_item in success_items:
-        _set_success_state(state, batch_item, completed_at)
+        state_entry = _set_success_state(state, batch_item, completed_at)
+        _push_batch_item_tracker_state(context, batch_item, state_entry)
         completed_force_keys.add(batch_item["state_key"])
         state_dirty = True
 
     if failed_item is not None:
-        _set_failure_state(state, failed_item, completed_at, return_code)
+        state_entry = _set_failure_state(state, failed_item, completed_at, return_code)
+        _push_batch_item_tracker_state(context, failed_item, state_entry)
         completed_force_keys.add(failed_item["state_key"])
         state_dirty = True
 
     for batch_item in retry_items:
-        _set_await_state(state, batch_item, "retry")
+        state_entry = _set_await_state(state, batch_item, "retry")
+        _push_batch_item_tracker_state(context, batch_item, state_entry)
         state_dirty = True
 
-    success_count = len(success_items)
-    failed_count = len(batch_info["items"]) - success_count
+    success_count = int(batch_info.get("success_count", 0)) + len(success_items)
+    failed_count = max(0, int(batch_info.get("item_count", len(batch_info["items"]))) - success_count)
     return {
         "completed_force_keys": completed_force_keys,
         "failed_count": failed_count,
@@ -706,6 +784,7 @@ def _set_success_state(state, batch_item, completed_at):
     state_entry["Last_extracted_mtime"] = batch_item["log_mtime"]
     state_entry["Last_status"] = state_done
     state[batch_item["state_key"]] = state_entry
+    return state_entry
 
 
 def _set_failure_state(state, batch_item, completed_at, return_code):
@@ -722,6 +801,7 @@ def _set_failure_state(state, batch_item, completed_at, return_code):
     state_entry["Last_extract_result"] = f"batch_failed:{return_code}"
     state_entry["Last_status"] = APR_VARS.get_setting("STATE_EXTRACT_FAILED")
     state[batch_item["state_key"]] = state_entry
+    return state_entry
 
 
 def _set_await_state(state, batch_item, reason):
@@ -737,6 +817,7 @@ def _set_await_state(state, batch_item, reason):
     state_entry["Last_extract_result"] = reason
     state_entry["Last_status"] = APR_VARS.get_setting("STATE_AWAIT")
     state[batch_item["state_key"]] = state_entry
+    return state_entry
 
 
 def _terminate_batch_process(process):

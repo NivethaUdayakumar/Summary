@@ -158,10 +158,10 @@ def compute_status(state_entry, log_path, mtime, size, is_extracting):
         status = settings["STATE_EXTRACTING"]
     elif force_extract == 1:
         status = settings["STATE_AWAIT"]
-    elif validation_error == "ERR001" and not file_changed:
-        status = settings["STATE_EXTRACT_FAILED"]
-    elif validation_error == "ERR002" and not file_changed:
+    elif validation_error in {"ERR001", "ERR002"} and not file_changed:
         status = settings["STATE_FAILED"]
+    elif validation_error == "ERR003" and not file_changed:
+        status = settings["STATE_EXTRACT_FAILED"]
     elif last_status == settings["STATE_EXTRACTING"]:
         status = settings["STATE_AWAIT"]
     elif last_status == settings["STATE_EXTRACT_FAILED"] and not file_changed:

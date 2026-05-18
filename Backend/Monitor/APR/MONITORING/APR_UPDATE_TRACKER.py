@@ -17,13 +17,14 @@ def apply_kpi_status(tracker_record, log_path, state_entry=None):
         is_valid = all(tracker_record[column_name] != "" for column_name in settings["KPI_COLUMNS"])
         tracker_record["Comments"] = "QC PASS" if is_valid else "ERR002"
         tracker_record["Promote"] = "yes" if is_valid else "no"
-        if not is_valid:
-            tracker_record["Status"] = settings["STATE_FAILED"]
     elif validation_error and tracker_record["Status"] in {settings["STATE_FAILED"], settings["STATE_EXTRACT_FAILED"]}:
         tracker_record["Comments"] = validation_error
         tracker_record["Promote"] = "no"
-    elif tracker_record["Status"] in {settings["STATE_FAILED"], settings["STATE_EXTRACT_FAILED"]}:
+    elif tracker_record["Status"] == settings["STATE_FAILED"]:
         tracker_record["Comments"] = "ERR001"
+        tracker_record["Promote"] = "no"
+    elif tracker_record["Status"] == settings["STATE_EXTRACT_FAILED"]:
+        tracker_record["Comments"] = "ERR003"
         tracker_record["Promote"] = "no"
     return tracker_record
 
@@ -35,14 +36,8 @@ def update_tracker(context, file_item):
     Input Params: context (dict), file_item (dict)
     Output: outputs (None)
     """
-    settings = APR_VARS.get_runtime_settings()
     context["writer"].check()
     tracker_record = apply_kpi_status(file_item["tracker_record"], file_item["log_path"], file_item["state_entry"])
     file_item["tracker_record"] = tracker_record
-
-    if file_item["state_entry"].get("Last_status") == settings["STATE_DONE"] and tracker_record["Status"] == settings["STATE_FAILED"]:
-        file_item["state_entry"]["Last_status"] = settings["STATE_FAILED"]
-        file_item["state_changed"] = True
-        context["state_dirty"] = True
 
     context["writer"].submit_tracker(tracker_record)
