@@ -9,12 +9,13 @@ from pathlib import Path
 import APR_VARS
 import psutil
 from Backend.Monitor.APR.EXTRACTORS.APR_KPI_EXTRACT import get_kpi_report_path
-from Backend.Monitor.APR.EXTRACTORS.APR_TIMING_INNOVUS import get_timing_report_paths
+from Backend.Monitor.APR.EXTRACTORS.APR_TIMING_INNOVUS import get_timing_report_paths, get_timing_db_path as build_timing_db_path
 import Backend.Monitor.APR.MONITORING.APR_SLEEP as APR_SLEEP
 from Backend.Monitor.APR.MONITORING import APR_UPDATE_LOG
 
 
 _BATCH_RUNTIMES = {}
+_ACTIVE_BATCH_PROCESSES = {}
 _VALIDATION_RESULT_PREFIX = "validation_failed:"
 _BATCH_PYTHON_MODULE = "Python3/3.11.1"
 _BATCH_PYTHON_COMMAND = "python3"
@@ -42,6 +43,55 @@ def _get_runtime(context):
     return runtime
 
 
+def _get_active_batch_processes(project_code):
+    """
+    Function Name: _get_active_batch_processes
+    Purpose: Return the tracked APR batch subprocess map for one project code, creating it when needed.
+    Input Params: project_code (str)
+    Output: active_processes (dict[int, subprocess.Popen])
+    """
+    normalized_project_code = str(project_code or "").strip()
+    active_processes = _ACTIVE_BATCH_PROCESSES.get(normalized_project_code)
+    if active_processes is None:
+        active_processes = {}
+        _ACTIVE_BATCH_PROCESSES[normalized_project_code] = active_processes
+    return active_processes
+
+
+def _register_batch_process(context, process):
+    """
+    Function Name: _register_batch_process
+    Purpose: Track one spawned APR batch subprocess immediately so shutdown can still find it if the monitor is interrupted mid-submit.
+    Input Params: context (dict), process (subprocess.Popen | None)
+    Output: outputs (None)
+    """
+    if process is None:
+        return
+
+    process_pid = getattr(process, "pid", None)
+    if not process_pid:
+        return
+
+    _get_active_batch_processes(context["project_code"])[process_pid] = process
+
+
+def _unregister_batch_process(context, process):
+    """
+    Function Name: _unregister_batch_process
+    Purpose: Remove one APR batch subprocess from the active-process registry after it exits or is torn down.
+    Input Params: context (dict), process (subprocess.Popen | None)
+    Output: outputs (None)
+    """
+    if process is None:
+        return
+
+    process_pid = getattr(process, "pid", None)
+    if not process_pid:
+        return
+
+    _get_active_batch_processes(context["project_code"]).pop(process_pid, None)
+
+
 def get_reserved_state_keys(context):
     """
     Function Name: get_reserved_state_keys
@@ -65,6 +115,47 @@ def is_item_in_flight(context, state_key):
     """
     runtime = _get_runtime(context)
     return any(state_key in batch_info["state_keys"] for batch_info in runtime["running_batches"].values())
+
+
+def finalize_ready_batch_items_now(context):
+    """
+    Function Name: finalize_ready_batch_items_now
+    Purpose: Immediately finalize every in-flight APR run whose timing database already exists during the current monitor pass.
+    Input Params: context (dict)
+    Output: result (dict)
+    """
+    state = context.get("state")
+    if not isinstance(state, dict):
+        return {
+            "completed_force_keys": set(),
+            "state_dirty": False,
+        }
+
+    runtime = _get_runtime(context)
+    completed_force_keys = set()
+    state_dirty = False
+    for batch_info in list(runtime["running_batches"].values()):
+        progress_result = _finalize_ready_batch_items(context, state, batch_info)
+        completed_force_keys.update(progress_result["completed_force_keys"])
+        state_dirty = state_dirty or progress_result["state_dirty"]
+
+    for completed_state_key in completed_force_keys:
+        _remove_force_extract_request(context, completed_state_key)
+
+    return {
+        "completed_force_keys": completed_force_keys,
+        "state_dirty": state_dirty,
+    }
+
+
+def finalize_ready_batch_item(context, state_key):
+    """
+    Function Name: finalize_ready_batch_item
+    Purpose: Immediately finalize all ready in-flight APR runs and report whether the requested run was one of them.
+    Input Params: context (dict), state_key (str)
+    Output: finalized (bool)
+    """
+    return state_key in finalize_ready_batch_items_now(context)["completed_force_keys"]
 
 
 def get_validation_error_code(state_entry):
@@ -127,6 +218,7 @@ def reconcile_batches(context, state):
             continue
 
         runtime["running_batches"].pop(batch_id, None)
+        _unregister_batch_process(context, batch_info["process"])
         _release_batch_slot(runtime, batch_info.get("slot_index"))
         result = _finalize_batch(context, state, batch_info, return_code)
         state_dirty = state_dirty or result["state_dirty"]
@@ -182,32 +274,51 @@ def shutdown_runtime(context, state):
     Input Params: context (dict), state (dict)
     Output: state_dirty (bool)
     """
-    runtime = _BATCH_RUNTIMES.get(context["project_code"])
-    if runtime is None:
+    project_code = context["project_code"]
+    runtime = _BATCH_RUNTIMES.get(project_code)
+    active_processes = _get_active_batch_processes(project_code)
+    if runtime is None and not active_processes:
         return False
 
     state_dirty = False
-    for batch_info in list(runtime["running_batches"].values()):
-        _terminate_batch_process(batch_info["process"])
-        for batch_item in batch_info["items"]:
-            state_entry = _set_await_state(state, batch_item, "terminated")
+    handled_process_ids = set()
+
+    if runtime is not None:
+        for batch_info in list(runtime["running_batches"].values()):
+            batch_process = batch_info["process"]
+            batch_process_id = getattr(batch_process, "pid", None)
+            if batch_process_id:
+                handled_process_ids.add(batch_process_id)
+
+            _terminate_batch_process(batch_process)
+            _unregister_batch_process(context, batch_process)
+            for batch_item in batch_info["items"]:
+                state_entry = _set_await_state(state, batch_item, "terminated")
+                _push_batch_item_tracker_state(context, batch_item, state_entry)
+                state_dirty = True
+
+        for batch_item in list(runtime["pending_items"].values()):
+            state_entry = _set_await_state(state, batch_item, "pending")
             _push_batch_item_tracker_state(context, batch_item, state_entry)
             state_dirty = True
 
-    for batch_item in list(runtime["pending_items"].values()):
-        state_entry = _set_await_state(state, batch_item, "pending")
-        _push_batch_item_tracker_state(context, batch_item, state_entry)
-        state_dirty = True
+        runtime["running_batches"].clear()
+        runtime["pending_items"].clear()
+        _sync_batch_command_slots(
+            context,
+            runtime,
+            max(1, int(APR_VARS.get_runtime_settings()["MAX_PARALLEL_BATCHES"])),
+            force_reset=True,
+        )
 
-    runtime["running_batches"].clear()
-    runtime["pending_items"].clear()
-    _sync_batch_command_slots(
-        context,
-        runtime,
-        max(1, int(APR_VARS.get_runtime_settings()["MAX_PARALLEL_BATCHES"])),
-        force_reset=True,
-    )
-    _BATCH_RUNTIMES.pop(context["project_code"], None)
+    for process_pid, process in list(active_processes.items()):
+        if process_pid in handled_process_ids:
+            continue
+        _terminate_batch_process(process)
+        active_processes.pop(process_pid, None)
+
+    _BATCH_RUNTIMES.pop(project_code, None)
+    _ACTIVE_BATCH_PROCESSES.pop(project_code, None)
     return state_dirty
 
 
@@ -238,12 +349,7 @@ def _get_timing_db_path(project_code, log_meta):
     Input Params: project_code (str), log_meta (dict)
     Output: db_path (str)
     """
-    project_root = Path(
-        os.path.abspath(
-            str(Path(APR_VARS.get_setting("PROJECTS_BASE_DIR")) / project_code / "DashAI" / "APR_RUNS")
-        )
-    )
-    return str(project_root / log_meta["Block"] / log_meta["Milestone"] / log_meta["Job"] / f"{log_meta['Stage']}_timing.db")
+    return build_timing_db_path(project_code, log_meta)
 
 
 def _dispatch_ready_batches(context):
@@ -297,10 +403,17 @@ def _submit_batch(context, runtime, batch_items):
     batch_file_path = _get_batch_command_file_path(context["runtime_paths"]["batch_commands_dir"], slot_index)
     command_text = _build_batch_command(batch_file_path)
     submitted_at = time.time()
+    process = None
     try:
         _write_batch_file(batch_file_path, _build_batch_file_lines(context, batch_items))
-        process = _spawn_batch_process(command_text)
+        project_name = context["project_code"].replace("dthpcadm_", "")
+        process = _spawn_batch_process(command_text, project_name)
+        _register_batch_process(context, process)
+        print(f"Submitted batch {batch_id} with PID {process.pid} | batch_file: {batch_file_path} | command: {command_text}")
     except Exception:
+        if process is not None:
+            _terminate_batch_process(process)
+            _unregister_batch_process(context, process)
         _release_batch_slot(runtime, slot_index)
         _requeue_batch_items(runtime, batch_items)
         APR_UPDATE_LOG.log_batch_completion(context, batch_id, len(batch_items), 0, len(batch_items))
@@ -482,28 +595,31 @@ def _build_batch_command(batch_file_path):
     Input Params: batch_file_path (str)
     Output: command_text (str)
     """
-    return f"utilq -Is source {shlex.quote(os.path.abspath(str(batch_file_path)))}"
+    #return f"utilq -Is source {shlex.quote(os.path.abspath(str(batch_file_path)))}"
+    return ["utilq", "-Is", "source", os.path.abspath(str(batch_file_path))]
 
 
-def _spawn_batch_process(command_text):
+def _spawn_batch_process(command_text, project_name):
     """
     Function Name: _spawn_batch_process
     Purpose: Spawn the APR batch subprocess that runs the chained extractor command string.
-    Input Params: command_text (str)
+    Input Params: command_text (str), project_name (str)
     Output: process (subprocess.Popen)
     """
+    my_env = os.environ.copy()
+    my_env["LSB_DEFAULTPROJECT"] = project_name
     kwargs = {
         "stderr": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
+        "env": my_env,
     }
     if os.name == "nt":
-        kwargs["shell"] = True
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         return subprocess.Popen(command_text, **kwargs)
 
     shell_path = "/bin/bash" if os.path.exists("/bin/bash") else os.environ.get("SHELL", "/bin/sh")
     kwargs["start_new_session"] = True
-    return subprocess.Popen([shell_path, "-lc", command_text], **kwargs)
+    return subprocess.Popen(command_text, **kwargs)
 
 
 def _mark_batch_items_extracting(context, batch_items):
@@ -646,12 +762,9 @@ def _finalize_ready_batch_items(context, state, batch_info):
     Output: result (dict)
     """
     ready_items = []
-    remaining_items = []
     for batch_item in batch_info["items"]:
         if _db_was_written_after_submit(batch_item["timing_db_path"], batch_info["submitted_at"]):
             ready_items.append(batch_item)
-        else:
-            remaining_items.append(batch_item)
 
     if not ready_items:
         return {
@@ -662,13 +775,9 @@ def _finalize_ready_batch_items(context, state, batch_info):
     completed_at = APR_VARS.now_str()
     completed_force_keys = set()
     for batch_item in ready_items:
-        state_entry = _set_success_state(state, batch_item, completed_at)
-        _push_batch_item_tracker_state(context, batch_item, state_entry)
+        _mark_batch_item_success(context, state, batch_info, batch_item, completed_at)
         completed_force_keys.add(batch_item["state_key"])
 
-    batch_info["items"] = remaining_items
-    batch_info["state_keys"] = {batch_item["state_key"] for batch_item in remaining_items}
-    batch_info["success_count"] = int(batch_info.get("success_count", 0)) + len(ready_items)
     return {
         "completed_force_keys": completed_force_keys,
         "state_dirty": True,
@@ -757,15 +866,38 @@ def _classify_batch_items(batch_info, return_code):
 def _db_was_written_after_submit(db_path, submitted_at):
     """
     Function Name: _db_was_written_after_submit
-    Purpose: Check whether the expected APR timing database file was written after the batch started.
+    Purpose: Check whether the expected APR timing database file exists (treat presence as completion).
     Input Params: db_path (str), submitted_at (float)
     Output: was_written (bool)
     """
     absolute_db_path = os.path.abspath(db_path)
     try:
-        return os.path.exists(absolute_db_path) and os.path.getmtime(absolute_db_path) >= submitted_at
+        # Consider the timing DB existence sufficient to mark the run completed.
+        return os.path.exists(absolute_db_path)
     except OSError:
         return False
+
+
+def _mark_batch_item_success(context, state, batch_info, batch_item, completed_at, push_tracker=True):
+    """
+    Function Name: _mark_batch_item_success
+    Purpose: Persist one APR batch item as completed, remove it from the running-batch set, and optionally push its tracker row immediately.
+    Input Params: context (dict), state (dict), batch_info (dict), batch_item (dict), completed_at (str), push_tracker (bool)
+    Output: state_entry (dict)
+    """
+    state_entry = _set_success_state(state, batch_item, completed_at)
+    if push_tracker:
+        _push_batch_item_tracker_state(context, batch_item, state_entry)
+
+    batch_info["items"] = [
+        existing_batch_item
+        for existing_batch_item in batch_info["items"]
+        if existing_batch_item["state_key"] != batch_item["state_key"]
+    ]
+    batch_info["state_keys"] = {existing_batch_item["state_key"] for existing_batch_item in batch_info["items"]}
+    batch_info["success_count"] = int(batch_info.get("success_count", 0)) + 1
+    context["state_dirty"] = True
+    return state_entry
 
 
 def _set_success_state(state, batch_item, completed_at):
@@ -781,7 +913,11 @@ def _set_success_state(state, batch_item, completed_at):
     state_entry["Force_extract"] = 0
     state_entry["Last_extract_finished_at"] = completed_at
     state_entry["Last_extract_result"] = "success"
-    state_entry["Last_extracted_mtime"] = batch_item["log_mtime"]
+    try:
+        current_log_mtime = int(os.path.getmtime(batch_item["log_path"]))
+    except OSError:
+        current_log_mtime = batch_item["log_mtime"]
+    state_entry["Last_extracted_mtime"] = max(batch_item["log_mtime"], current_log_mtime)
     state_entry["Last_status"] = state_done
     state[batch_item["state_key"]] = state_entry
     return state_entry
@@ -820,6 +956,76 @@ def _set_await_state(state, batch_item, reason):
     return state_entry
 
 
+def _terminate_psutil_process_tree(root_pid, terminate_timeout=3, kill_timeout=2):
+    """
+    Function Name: _terminate_psutil_process_tree
+    Purpose: Terminate one local process tree by PID using psutil recursion, then force-kill anything still alive after a short wait.
+    Input Params: root_pid (int | None), terminate_timeout (int | float), kill_timeout (int | float)
+    Output: outputs (None)
+    """
+    if not root_pid:
+        return
+
+    try:
+        root_process = psutil.Process(root_pid)
+    except Exception:
+        return
+
+    try:
+        child_processes = root_process.children(recursive=True)
+    except Exception:
+        child_processes = []
+
+    for child_process in child_processes:
+        try:
+            child_process.terminate()
+        except Exception:
+            pass
+
+    try:
+        root_process.terminate()
+    except Exception:
+        pass
+
+    _, alive_processes = psutil.wait_procs([root_process, *child_processes], timeout=terminate_timeout)
+    for alive_process in alive_processes:
+        try:
+            alive_process.kill()
+        except Exception:
+            pass
+
+    if alive_processes:
+        try:
+            psutil.wait_procs(alive_processes, timeout=kill_timeout)
+        except Exception:
+            pass
+
+
+def _taskkill_process_tree(root_pid):
+    """
+    Function Name: _taskkill_process_tree
+    Purpose: Force-kill one Windows process tree using taskkill so child console processes do not survive monitor shutdown.
+    Input Params: root_pid (int | None)
+    Output: outputs (None)
+    """
+    if not root_pid or os.name != "nt":
+        return
+
+    kwargs = {
+        "check": False,
+        "stderr": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+    }
+    create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if create_no_window:
+        kwargs["creationflags"] = create_no_window
+
+    try:
+        subprocess.run(["taskkill", "/PID", str(int(root_pid)), "/T", "/F"], **kwargs)
+    except Exception:
+        pass
+
+
 def _terminate_batch_process(process):
     """
     Function Name: _terminate_batch_process
@@ -827,37 +1033,50 @@ def _terminate_batch_process(process):
     Input Params: process (subprocess.Popen | None)
     Output: outputs (None)
     """
-    if process is None or process.poll() is not None:
+    if process is None:
         return
 
+    process_pid = getattr(process, "pid", None)
     try:
         if os.name == "nt":
-            root_process = psutil.Process(process.pid)
-            child_processes = root_process.children(recursive=True)
-            for child_process in child_processes:
-                try:
-                    child_process.terminate()
-                except Exception:
-                    pass
+            _taskkill_process_tree(process_pid)
             try:
-                root_process.terminate()
+                process.wait(timeout=3)
+                return
             except Exception:
                 pass
 
-            _, alive_processes = psutil.wait_procs([root_process, *child_processes], timeout=3)
-            for alive_process in alive_processes:
+            _terminate_psutil_process_tree(process_pid)
+            try:
+                process.wait(timeout=2)
+            except Exception:
+                pass
+            if process.poll() is None:
                 try:
-                    alive_process.kill()
+                    process.kill()
                 except Exception:
                     pass
-        else:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-            process.wait(timeout=3)
+            return
+
+        if process.poll() is None:
+            try:
+                os.killpg(os.getpgid(process_pid), signal.SIGTERM)
+                process.wait(timeout=3)
+                return
+            except Exception:
+                pass
+
+        _terminate_psutil_process_tree(process_pid)
+        if process.poll() is not None:
+            return
+
+        try:
+            os.killpg(os.getpgid(process_pid), signal.SIGKILL)
+            process.wait(timeout=2)
+        except Exception:
+            pass
     except Exception:
         try:
-            if os.name == "nt":
-                process.kill()
-            else:
-                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            _terminate_psutil_process_tree(process_pid)
         except Exception:
             pass

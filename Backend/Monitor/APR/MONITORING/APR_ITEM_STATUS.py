@@ -166,7 +166,7 @@ def compute_status(state_entry, log_path, mtime, size, is_extracting):
         status = settings["STATE_AWAIT"]
     elif last_status == settings["STATE_EXTRACT_FAILED"] and not file_changed:
         status = settings["STATE_EXTRACT_FAILED"]
-    elif source_db_exists or last_extracted_mtime is not None:
+    elif source_db_exists:
         if last_extracted_mtime is None:
             status = settings["STATE_AWAIT"]
         elif mtime > last_extracted_mtime:
@@ -198,9 +198,14 @@ def get_item_status(context, monitor_item):
     log_meta = parse_log_args(log_path)
     file_info = get_file_info(log_path)
     state_key = log_meta["State_key"]
-    saved_state = dict(monitor_item.get("saved_state") or {})
+    previous_status = dict(monitor_item.get("saved_state") or {}).get("Last_status")
+
+    # If any in-flight batch items already have timing DBs, finalize all of them before
+    # computing this item's status so the tracker rows flip to Completed together.
+    APR_STATUS_ACTION.finalize_ready_batch_item(context, state_key)
+
+    saved_state = dict(context.get("state", {}).get(state_key, monitor_item.get("saved_state") or {}))
     state_entry = dict(saved_state)
-    previous_status = saved_state.get("Last_status")
 
     state_entry.setdefault("Created", APR_VARS.now_str())
     tracker_record = build_record(log_path, state_entry["Created"], log_meta, file_info)

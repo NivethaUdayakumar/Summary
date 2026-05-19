@@ -369,6 +369,22 @@ class MonitorService:
             return
 
         try:
+            if os.name == "nt":
+                kwargs = {
+                    "check": False,
+                    "stderr": subprocess.DEVNULL,
+                    "stdout": subprocess.DEVNULL,
+                }
+                create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if create_no_window:
+                    kwargs["creationflags"] = create_no_window
+                subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"], **kwargs)
+                try:
+                    proc.wait(timeout=3)
+                    return
+                except Exception:
+                    pass
+
             children = proc.children(recursive=True)
             for child in children:
                 try:
@@ -398,6 +414,47 @@ class MonitorService:
                 pass
         finally:
             self._process_cache.pop(pid, None)
+
+    def _snapshot_pid_family(self, pid: int):
+        if not pid:
+            return {}
+
+        try:
+            root_process = psutil.Process(pid)
+        except Exception:
+            return {}
+
+        try:
+            process_family = [root_process, *root_process.children(recursive=True)]
+        except Exception:
+            process_family = [root_process]
+
+        snapshot = {}
+        for process_info in process_family:
+            try:
+                snapshot[process_info.pid] = process_info.create_time()
+            except Exception:
+                pass
+        return snapshot
+
+    def _kill_pid_snapshot(self, pid_snapshot, exclude_pids=None):
+        exclude_pids = set(exclude_pids or [])
+        for candidate_pid, created_at in sorted(dict(pid_snapshot or {}).items(), reverse=True):
+            if not candidate_pid or candidate_pid in exclude_pids:
+                continue
+
+            try:
+                proc = psutil.Process(candidate_pid)
+            except Exception:
+                continue
+
+            try:
+                if abs(float(proc.create_time()) - float(created_at)) > 0.01:
+                    continue
+            except Exception:
+                continue
+
+            self._kill_pid(candidate_pid)
 
     def _request_pid_shutdown(self, pid: int):
         if not pid:
@@ -466,17 +523,23 @@ class MonitorService:
         conn.close()
 
         pid = row["pid"]
+        pid_snapshot = self._snapshot_pid_family(pid) if pid and self._is_pid_alive(pid) else {}
         if pid and self._supports_graceful_shutdown(row["template_name"]) and self._is_pid_alive(pid):
             shutdown_requested = self._request_pid_shutdown(pid)
             shutdown_wait_seconds = self._get_shutdown_wait_seconds(row["template_name"], "stop")
             if shutdown_requested and self._wait_for_pid_exit(pid, shutdown_wait_seconds):
+                self._kill_pid_snapshot(pid_snapshot, exclude_pids={pid})
                 pid = None
             else:
                 self._kill_pid(pid)
+                self._kill_pid_snapshot(pid_snapshot, exclude_pids={pid})
                 pid = None
 
         if pid:
+            if not pid_snapshot:
+                pid_snapshot = self._snapshot_pid_family(pid)
             self._kill_pid(pid)
+            self._kill_pid_snapshot(pid_snapshot, exclude_pids={pid})
 
         now = self._now()
         conn = self._connect_registry()
@@ -512,16 +575,21 @@ class MonitorService:
         conn.close()
 
         pid = row["pid"]
+        pid_snapshot = self._snapshot_pid_family(pid) if pid and self._is_pid_alive(pid) else {}
         if pid and self._supports_graceful_shutdown(row["template_name"]) and self._is_pid_alive(pid):
             shutdown_requested = self._request_pid_shutdown(pid)
             if not shutdown_requested and self._is_pid_alive(pid):
                 raise RuntimeError(f"Unable to request graceful shutdown for monitor '{monitor_name}'")
 
             self._wait_for_pid_exit(pid)
+            self._kill_pid_snapshot(pid_snapshot, exclude_pids={pid})
             pid = None
 
         if pid:
+            if not pid_snapshot:
+                pid_snapshot = self._snapshot_pid_family(pid)
             self._kill_pid(pid)
+            self._kill_pid_snapshot(pid_snapshot, exclude_pids={pid})
 
         conn = self._connect_registry()
         cur = conn.cursor()

@@ -24,12 +24,12 @@ APR Monitoring Process
     subprocess.Popen then launches:
     utilq -Is source <abs_path_to_slot_batch_file>
 19. When a batch is submitted, all its runs are marked as "Extracting" in memory, persisted state, and tracker SQLite immediately, and one batch submission log line is written.
-20. On every monitor cycle, running batches are checked for DashAI timing DB files that were written after the batch submit time.
-21. As soon as one run's timing DB exists, that run moves to "Completed" immediately and its tracker row is refreshed without waiting for the rest of the batch process to finish.
+20. On every monitor cycle, and again while item statuses are being computed, running batches are checked for existing DashAI timing DB files.
+21. As soon as any in-flight runs have timing DBs, all matching runs move to "Completed" immediately and their tracker rows are refreshed without waiting for the rest of the batch process to finish.
 22. When the batch process exits, any remaining unresolved runs are classified: the first missing run becomes "Extraction Failed"; later missing runs are returned to "Await Extraction" for retry.
 23. APR_UPDATE_TRACKER applies KPI extraction from EXTRACTORS/APR_KPI_EXTRACT.py and submits tracker rows to SQLite. Completed runs stay "Completed"; if KPI values are blank, the tracker keeps comment ERR002 and Promote=no.
 24. Tracker comments use ERR001 for generic job failure, ERR002 for missing KPI data, and ERR003 for missing timing reports. Persisted ERR001 and ERR002 runs stay in "Job Failed", while ERR003 runs stay in "Extraction Failed" until the source files change.
 25. APR_DB_ACTIONS refreshes tracker schema dynamically, so new KPI columns can be added while the monitor is running. Existing rows keep blank values for new text columns until updated.
-26. Completed force-extract requests are removed from the JSON file after that run finishes, even if other runs from the same batch are still in flight.
+26. Completed force-extract requests are removed from the JSON file after those runs finish, even if other runs from the same batch are still in flight.
 27. If the monitor is stopped, runs that already reached "Completed" stay complete; only unresolved "Extracting" or pending batch items are reset back to "Await Extraction" during cleanup.
 28. APR_UPDATE_LOG only writes batch-level log lines: submitted count, completed count, success count, and failed count.
