@@ -2,34 +2,127 @@ APR Monitoring Process
 
 1. FLOW_MONITOR.py starts the APR flow once with FLOW and PROJECT_CODE from sys args.
 2. APR_MONITOR_ITEMS.build_context creates the long-lived runtime context for that project.
-3. Every monitor loop, APR_MONITOR_ITEMS.get_runtime_paths rebuilds absolute paths from APR_VARS.py.
-4. APR_VARS.py is reloaded on demand, so edits to batch size, poll time, stages, paths, and other settings are picked up without restarting the monitor.
-5. The monitor refreshes the logger, state file path, force-extract JSON path, and tracker writer path each cycle.
-6. The state file is loaded fresh each cycle. Only persistent run fields are stored there; worker queues and subprocess objects are kept only in memory.
-7. The force-extract JSON is read from /proj/<project_code>/DashAI/APR_FORCE_EXTRACT.json and normalized into items with keys job, milestone, block, and stage.
-8. IMP run directories are scanned using absolute paths and the configured depth / flow / tool filters.
-9. Stage log files are discovered for each configured APR stage.
-10. APR_ITEM_STATUS computes the tracker status for each log using current file metadata, persisted state, and whether that run is already in a batch.
-11. Runs in "Await Extraction" are validated before batch submission. Missing KPI files are marked with ERR002 and move to "Job Failed"; missing timing reports are marked with ERR003 and move to "Extraction Failed".
-12. Valid runs in "Await Extraction" are queued into the batch runtime owned by APR_STATUS_ACTION.
-13. Pending runs are grouped into batches of APR_VARS.BATCH_SIZE.
-14. At most APR_VARS.MAX_PARALLEL_BATCHES batch subprocesses run at the same time.
-15. If the pending queue does not reach BATCH_SIZE within APR_VARS.BATCH_RUN_WAIT_TIME seconds, the current pending count is launched as a short batch in any free parallel slot.
-16. The monitor manages EXTRACTORS/BATCH_COMMANDS so it contains one batch command file per configured parallel batch slot.
-17. When the parallel-batch count is initialized or safely reset with no active batches, existing managed batch command files are deleted and recreated.
-18. Each submitted batch rewrites one slot file, for example EXTRACTORS/BATCH_COMMANDS/BATCH_COMMAND_1.txt, so line 1 is:
+3. Every monitor loop, APR_MONITOR_ITEMS.refresh_runtime_context rebuilds absolute runtime paths from APR_VARS.py, ensures DashAI folders exist, refreshes the logger, and refreshes the SQLite tracker writer.
+4. APR_VARS.py is reloaded on demand, so edits to paths, stages, poll time, batch size, or parallel-batch settings are picked up without restarting the monitor.
+5. APR_MONITOR_ITEMS.load_runtime_payloads loads the persisted state JSON and the force-extract JSON fresh at the start of each cycle.
+6. APR_STATUS_ACTION.reconcile_batches runs before log discovery. It finalizes any already-complete in-flight items, polls finished batch submit processes, classifies the remaining items in those batches, and launches any next ready batches if parallel slots are free.
+7. Force-extract requests are then applied to state entries unless the matching run is already reserved by the pending queue or a running batch.
+8. APR_MONITOR_ITEMS persists dirty state / force-extract payloads only when that cycle actually changed them.
+9. IMP run directories are scanned using the configured depth, flow, and tool filters.
+10. Stage log files are discovered for each configured APR stage and converted into monitor items.
+
+Item Status Rules
+
+11. APR_ITEM_STATUS.get_item_status parses the log path, reads file info, and finalizes ready batch items one more time before computing this log's status. This keeps the per-item status pass in sync with batch completion updates.
+12. APR_OUTPUTS.py centralizes run-output detection:
+    source DB path -> IMP run dbinfo
+    timing DB path -> DashAI APR_RUNS stage timing DB
+13. A run is considered Completed only when both the source DB and the timing DB exist.
+14. If both DBs exist but the log mtime is newer than the timing DB mtime, the run moves back to Await Extraction and Rerun is incremented if it was previously Completed.
+15. If a run is currently part of a submitted batch, its computed status is Extracting.
+16. If Force_extract is set, its computed status is Await Extraction.
+17. Validation errors are persisted through Last_extract_result:
+    ERR001 / ERR002 hold the run in Job Failed while the log stays unchanged
+    ERR003 holds the run in Extraction Failed while the log stays unchanged
+18. If the source DB exists but the timing DB does not exist, the run is Await Extraction.
+19. If neither DB exists, the log age decides between Job Running and Job Failed.
+20. Base tracker comments from APR_ITEM_STATUS are:
+    "-" for normal non-error states
+    ERR001 for generic job failure
+    ERR002 for persisted KPI / validation failure
+    ERR003 for missing timing reports / extraction failure
+
+Batch Queue and Submission
+
+21. APR_STATUS_ACTION owns one in-memory batch runtime per project_code.
+22. That runtime keeps:
+    pending_items -> FIFO OrderedDict of runs waiting for extraction
+    running_batches -> active submitted batches
+    available_batch_slots -> reusable BATCH_COMMAND_n.txt files
+    next_batch_id -> incremental batch id counter
+23. perform_status_action only acts on items whose computed status is Await Extraction.
+24. Before queueing, check_valid_job validates the inputs:
+    missing KPI report -> ERR002 -> Job Failed
+    missing timing reports -> ERR003 -> Extraction Failed
+25. Valid items are queued only if they are not already pending and not already in a running batch.
+26. _dispatch_ready_batches forms batches from the FIFO pending queue.
+27. If pending count >= BATCH_SIZE, a full batch is launched immediately.
+28. If pending count < BATCH_SIZE, the oldest queued item must wait at least BATCH_RUN_WAIT_TIME seconds before a short batch is launched.
+29. At most MAX_PARALLEL_BATCHES batches may run at the same time.
+
+Batch Command Files
+
+30. The monitor manages EXTRACTORS/BATCH_COMMANDS as a pool of slot files:
+    BATCH_COMMAND_1.txt
+    BATCH_COMMAND_2.txt
+    ...
+31. When batch slots are initialized or safely reset with no active batches, old managed files are deleted and recreated.
+32. Submitting a batch claims one free slot file.
+33. Each slot file is rewritten atomically before submission.
+34. Line 1 of a slot file is:
     module load Python3/3.11.1
-    and each remaining line is one extractor command:
+35. Each later line is one extractor command:
     python3 <abs_path_to_APR_TIMING_INNOVUS.py> <project_code> <stage> <run_dir>
-    subprocess.Popen then launches:
-    utilq -Is source <abs_path_to_slot_batch_file>
-19. When a batch is submitted, all its runs are marked as "Extracting" in memory, persisted state, and tracker SQLite immediately, and one batch submission log line is written.
-20. On every monitor cycle, and again while item statuses are being computed, running batches are checked for existing DashAI timing DB files.
-21. As soon as any in-flight runs have timing DBs, all matching runs move to "Completed" immediately and their tracker rows are refreshed without waiting for the rest of the batch process to finish.
-22. When the batch process exits, any remaining unresolved runs are classified: the first missing run becomes "Extraction Failed"; later missing runs are returned to "Await Extraction" for retry.
-23. APR_UPDATE_TRACKER applies KPI extraction from EXTRACTORS/APR_KPI_EXTRACT.py and submits tracker rows to SQLite. Completed runs stay "Completed"; if KPI values are blank, the tracker keeps comment ERR002 and Promote=no.
-24. Tracker comments use ERR001 for generic job failure, ERR002 for missing KPI data, and ERR003 for missing timing reports. Persisted ERR001 and ERR002 runs stay in "Job Failed", while ERR003 runs stay in "Extraction Failed" until the source files change.
-25. APR_DB_ACTIONS refreshes tracker schema dynamically, so new KPI columns can be added while the monitor is running. Existing rows keep blank values for new text columns until updated.
-26. Completed force-extract requests are removed from the JSON file after those runs finish, even if other runs from the same batch are still in flight.
-27. If the monitor is stopped, runs that already reached "Completed" stay complete; only unresolved "Extracting" or pending batch items are reset back to "Await Extraction" during cleanup.
-28. APR_UPDATE_LOG only writes batch-level log lines: submitted count, completed count, success count, and failed count.
+36. The submit command stored for the batch is:
+    utilq -Is source <abs_path_to_slot_file>
+37. That submit command is launched through subprocess.Popen with LSB_DEFAULTPROJECT set from the project code.
+
+Running Batch Tracking
+
+38. Each running batch stores:
+    batch_id
+    batch_file_path
+    submit_command
+    process
+    slot_index
+    items
+    state_keys
+    success_count
+    lsf_job_id
+39. As soon as a batch is submitted, every item in that batch is marked Extracting in state and tracker immediately.
+40. Batch submission and completion are logged through APR_UPDATE_LOG with batch-level records only.
+
+Batch Completion and Retry Rules
+
+41. On every monitor cycle, reconcile_batches checks every running batch for ready items before polling the submit process.
+42. _finalize_ready_batch_items promotes any still-running items to Completed as soon as both output DBs exist. The rest of the batch may still be running.
+43. Completed items are removed from batch_info["items"], their state is updated, and their tracker rows are refreshed immediately.
+44. When the batch submit process exits, _finalize_batch classifies the remaining items.
+45. If the batch exit code is 0:
+    items with both DBs -> success
+    first remaining missing item -> Extraction Failed
+    later remaining missing items -> Await Extraction for retry
+46. If the batch exit code is non-zero:
+    leading items with both DBs -> success
+    first missing item -> Extraction Failed
+    later items after that first failure -> Await Extraction for retry
+47. Requeued items are not put back directly in the same function; instead their state becomes Await Extraction, so the next monitor cycle will queue them again through perform_status_action.
+48. Completed force-extract requests are removed from the force-extract JSON once those runs finish.
+
+Tracker, Log, and State Updates
+
+49. APR_UPDATE_TRACKER.apply_kpi_status fills KPI columns for Completed runs.
+50. If KPI values are complete, Comments becomes QC PASS and Promote becomes yes.
+51. If KPI values are blank, the run still stays Completed, but Comments becomes ERR002 and Promote stays no.
+52. For failed states, APR_UPDATE_TRACKER preserves the base error comment when available instead of replacing it blindly.
+53. APR_UPDATE_LOG keeps only batch-level log entries:
+    batch_submitted
+    batch_completed
+    batch_terminated
+54. APR_UPDATE_STATE writes file_item["state_entry"] back into context["state"] and persists dirty state / force-extract payloads.
+
+Shutdown / Close Behavior
+
+55. APR_CLOSE.close_context loads state and force-extract data if they were not already loaded, then calls APR_STATUS_ACTION.shutdown_runtime.
+56. shutdown_runtime walks every running batch and tries to stop it through LSF first.
+57. The LSF lookup command is:
+    bjobs -o "JOBID COMMAND"
+58. The monitor scans that output and matches the batch by stored batch_file_path or submit_command.
+59. If a match is found, the returned JOBID is killed with:
+    bkill <JOBID>
+60. After the LSF kill attempt, the local submit process is still terminated as a fallback.
+61. During shutdown:
+    items whose outputs are already complete stay Completed
+    unresolved Extracting items are reset to Await Extraction
+    pending but never-submitted items are also reset to Await Extraction
+62. State, force-extract payload, tracker writer, and logger are then closed cleanly.

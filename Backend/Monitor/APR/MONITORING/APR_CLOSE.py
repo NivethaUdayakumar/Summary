@@ -3,8 +3,7 @@ from Backend.Monitor.APR.MONITORING.APR_MONITOR_ITEMS import (
     get_runtime_paths,
     load_force_extract_payload,
     load_state_file,
-    save_force_extract_payload,
-    save_state_file,
+    persist_runtime_payloads,
 )
 from Backend.Monitor.APR.MONITORING.APR_UPDATE_LOG import close_logger
 
@@ -37,10 +36,7 @@ def close_context(context):
         if state is not None and APR_STATUS_ACTION.shutdown_runtime(context, state):
             context["state_dirty"] = True
 
-        if context.get("state_dirty"):
-            save_state_file(context)
-        if context.get("force_extract_dirty"):
-            save_force_extract_payload(context)
+        persist_runtime_payloads(context)
     except Exception:
         pass
     finally:

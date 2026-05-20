@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 import APR_VARS
+from Backend.Monitor.APR.MONITORING import APR_OUTPUTS
 from Backend.Monitor.APR.MONITORING import APR_STATUS_ACTION
 
 try:
@@ -117,28 +118,35 @@ def build_record(log_path, created, meta=None, info=None):
     return tracker_record
 
 
-def db_exists_for_stage(file_path):
+def get_status_comment(status, state_entry):
     """
-    Function Name: db_exists_for_stage
-    Purpose: Check whether the source APR job has already produced its native stage database output.
-    Input Params: file_path (str)
-    Output: exists (bool)
+    Function Name: get_status_comment
+    Purpose: Return the base tracker comment for one APR monitor status before KPI validation is applied.
+    Input Params: status (str), state_entry (dict)
+    Output: comment (str)
     """
-    metadata = parse_log_args(file_path)
-    run_dir = Path(os.path.abspath(file_path)).parent.parent
-    db_path = run_dir / "dbs" / f"{metadata['Stage']}_final" / f"{metadata['Job']}.dat" / f"{metadata['Job']}.dbinfo"
-    return db_path.exists()
+    settings = APR_VARS.get_runtime_settings()
+    validation_error = APR_STATUS_ACTION.get_validation_error_code(state_entry)
+    if validation_error and status in {settings["STATE_FAILED"], settings["STATE_EXTRACT_FAILED"]}:
+        return validation_error
+    if status == settings["STATE_FAILED"]:
+        return "ERR001"
+    if status == settings["STATE_EXTRACT_FAILED"]:
+        return "ERR003"
+    return "-"
 
 
-def compute_status(state_entry, log_path, mtime, size, is_extracting):
+def compute_status(context, state_entry, log_path, log_meta, file_info, is_extracting):
     """
     Function Name: compute_status
-    Purpose: Compute the APR monitor status for one run from file changes, persisted state, source DB presence, and batch activity.
-    Input Params: state_entry (dict), log_path (str), mtime (int), size (int), is_extracting (bool)
-    Output: outputs (tuple[str, dict, int])
+    Purpose: Compute the APR monitor status for one run from file changes, source/timing outputs, persisted state, and batch activity.
+    Input Params: context (dict), state_entry (dict), log_path (str), log_meta (dict), file_info (dict), is_extracting (bool)
+    Output: outputs (tuple[str, str, dict, int])
     """
     settings = APR_VARS.get_runtime_settings()
     now_epoch = int(time.time())
+    mtime = int(file_info["mtime"])
+    size = int(file_info["size"])
     last_seen_mtime = state_entry.get("Last_seen_mtime")
     last_seen_size = state_entry.get("Last_seen_size")
     last_change_time = state_entry.get("Last_change_time")
@@ -152,29 +160,33 @@ def compute_status(state_entry, log_path, mtime, size, is_extracting):
     if file_changed:
         last_change_time = now_epoch
 
-    source_db_exists = db_exists_for_stage(log_path)
+    output_state = APR_OUTPUTS.get_output_state(context["project_code"], log_path, log_meta)
+    outputs_complete = APR_OUTPUTS.outputs_are_complete(output_state)
+    effective_extract_mtime = output_state["timing_db_mtime"]
+    if effective_extract_mtime is None and last_extracted_mtime is not None:
+        effective_extract_mtime = int(last_extracted_mtime)
 
     if is_extracting:
         status = settings["STATE_EXTRACTING"]
     elif force_extract == 1:
         status = settings["STATE_AWAIT"]
-    elif validation_error in {"ERR001", "ERR002"} and not file_changed:
-        status = settings["STATE_FAILED"]
-    elif validation_error == "ERR003" and not file_changed:
-        status = settings["STATE_EXTRACT_FAILED"]
-    elif last_status == settings["STATE_EXTRACTING"]:
-        status = settings["STATE_AWAIT"]
-    elif last_status == settings["STATE_EXTRACT_FAILED"] and not file_changed:
-        status = settings["STATE_EXTRACT_FAILED"]
-    elif source_db_exists:
-        if last_extracted_mtime is None:
-            status = settings["STATE_AWAIT"]
-        elif mtime > last_extracted_mtime:
+    elif outputs_complete:
+        if effective_extract_mtime is not None and mtime > effective_extract_mtime:
             if last_status == settings["STATE_DONE"]:
                 rerun_count += 1
             status = settings["STATE_AWAIT"]
         else:
             status = settings["STATE_DONE"]
+    elif validation_error in {"ERR001", "ERR002"} and not file_changed:
+        status = settings["STATE_FAILED"]
+    elif validation_error == "ERR003" and not file_changed:
+        status = settings["STATE_EXTRACT_FAILED"]
+    elif last_status == settings["STATE_EXTRACTING"] and not outputs_complete:
+        status = settings["STATE_AWAIT"]
+    elif last_status == settings["STATE_EXTRACT_FAILED"] and not file_changed:
+        status = settings["STATE_EXTRACT_FAILED"]
+    elif output_state["source_db_exists"]:
+        status = settings["STATE_AWAIT"]
     else:
         age = now_epoch - (last_change_time if last_change_time is not None else now_epoch)
         status = settings["STATE_RUNNING"] if age <= 15 * 60 else settings["STATE_FAILED"]
@@ -184,7 +196,7 @@ def compute_status(state_entry, log_path, mtime, size, is_extracting):
     state_entry["Last_seen_size"] = size
     state_entry["Last_status"] = status
     state_entry["Rerun"] = rerun_count
-    return status, state_entry, rerun_count
+    return status, get_status_comment(status, state_entry), state_entry, rerun_count
 
 
 def get_item_status(context, monitor_item):
@@ -198,24 +210,25 @@ def get_item_status(context, monitor_item):
     log_meta = parse_log_args(log_path)
     file_info = get_file_info(log_path)
     state_key = log_meta["State_key"]
-    previous_status = dict(monitor_item.get("saved_state") or {}).get("Last_status")
 
-    # If any in-flight batch items already have timing DBs, finalize all of them before
-    # computing this item's status so the tracker rows flip to Completed together.
-    APR_STATUS_ACTION.finalize_ready_batch_item(context, state_key)
+    # Finalize any already-ready batch items before computing a fresh status so
+    # this pass uses the latest shared batch state.
+    APR_STATUS_ACTION.finalize_ready_batch_items_now(context)
 
     saved_state = dict(context.get("state", {}).get(state_key, monitor_item.get("saved_state") or {}))
     state_entry = dict(saved_state)
 
     state_entry.setdefault("Created", APR_VARS.now_str())
     tracker_record = build_record(log_path, state_entry["Created"], log_meta, file_info)
-    status, state_entry, rerun_count = compute_status(
+    status, comment, state_entry, rerun_count = compute_status(
+        context,
         state_entry,
         log_path,
-        file_info["mtime"],
-        file_info["size"],
+        log_meta,
+        file_info,
         APR_STATUS_ACTION.is_item_in_flight(context, state_key),
     )
+    tracker_record["Comments"] = comment
     tracker_record["Rerun"] = rerun_count
     tracker_record["Status"] = status
 
@@ -223,7 +236,6 @@ def get_item_status(context, monitor_item):
         "file_info": file_info,
         "log_meta": log_meta,
         "log_path": log_path,
-        "previous_status": previous_status,
         "state_changed": state_entry != saved_state,
         "state_entry": state_entry,
         "state_key": state_key,

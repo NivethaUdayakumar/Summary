@@ -1,4 +1,4 @@
-from Backend.Monitor.APR.MONITORING.APR_MONITOR_ITEMS import save_force_extract_payload, save_state_file
+from Backend.Monitor.APR.MONITORING.APR_MONITOR_ITEMS import persist_runtime_payloads
 
 
 def update_state(context, file_item):
@@ -12,7 +12,4 @@ def update_state(context, file_item):
     if file_item["state_changed"]:
         context["state_dirty"] = True
 
-    if context.get("state_dirty"):
-        save_state_file(context)
-    if context.get("force_extract_dirty"):
-        save_force_extract_payload(context)
+    persist_runtime_payloads(context)

@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>APR Monitor Flow</title>
+  <style>
+    :root {
+      --bg: #f5efe4;
+      --panel: rgba(255, 251, 245, 0.88);
+      --panel-strong: #fffaf2;
+      --ink: #17212b;
+      --muted: #52606d;
+      --line: rgba(23, 33, 43, 0.12);
+      --teal: #157a6e;
+      --teal-soft: #d9f3ee;
+      --orange: #d97b29;
+      --orange-soft: #fde9d7;
+      --red: #b44a3f;
+      --red-soft: #f9e2de;
+      --blue: #295c9f;
+      --blue-soft: #dfeafa;
+      --shadow: 0 22px 50px rgba(20, 30, 40, 0.10);
+      --radius: 22px;
+      --font-sans: "Aptos", "Trebuchet MS", "Segoe UI", sans-serif;
+      --font-mono: "Cascadia Code", "Consolas", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: var(--font-sans);
+      background:
+        radial-gradient(circle at top left, rgba(21, 122, 110, 0.14), transparent 28%),
+        radial-gradient(circle at top right, rgba(217, 123, 41, 0.14), transparent 24%),
+        linear-gradient(180deg, #fbf6ee 0%, var(--bg) 100%);
+    }
+
+    .page {
+      width: min(1200px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+
+    .hero,
+    .section {
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.65);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 28px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -60px -80px auto;
+      width: 220px;
+      height: 220px;
+      background: radial-gradient(circle, rgba(21, 122, 110, 0.18), transparent 65%);
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-block;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: var(--teal-soft);
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.05;
+    }
+
+    h1 {
+      margin-top: 14px;
+      font-size: clamp(32px, 5vw, 58px);
+      max-width: 10ch;
+    }
+
+    .hero p {
+      max-width: 72ch;
+      margin: 16px 0 0;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.65;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.5fr 1fr;
+      gap: 20px;
+      margin-top: 24px;
+    }
+
+    .stat-panel {
+      padding: 18px;
+      border-radius: 18px;
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+    }
+
+    .stat-panel strong {
+      display: block;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .chip {
+      padding: 9px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: white;
+      font-size: 13px;
+    }
+
+    .chip code,
+    code,
+    pre {
+      font-family: var(--font-mono);
+    }
+
+    nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 18px 0 24px;
+    }
+
+    nav a {
+      text-decoration: none;
+      color: var(--ink);
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.72);
+      font-size: 14px;
+    }
+
+    .section {
+      padding: 24px;
+      margin-top: 18px;
+    }
+
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .section-header p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      max-width: 72ch;
+      line-height: 1.6;
+    }
+
+    .flow-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .flow-card,
+    .lane-card,
+    .status-card,
+    .runtime-card,
+    .shutdown-card {
+      position: relative;
+      padding: 18px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+      min-height: 100%;
+    }
+
+    .flow-card::after {
+      content: ">";
+      position: absolute;
+      right: -12px;
+      top: 24px;
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 999px;
+      background: white;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .flow-card:last-child::after {
+      display: none;
+    }
+
+    .step-no {
+      display: inline-grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
+      background: var(--teal-soft);
+      color: var(--teal);
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .flow-card p,
+    .lane-card p,
+    .status-card p,
+    .runtime-card p,
+    .shutdown-card p,
+    li {
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .lane-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .lane-card:nth-child(1) {
+      background: linear-gradient(180deg, #fffdf7, #fff7eb);
+    }
+
+    .lane-card:nth-child(2) {
+      background: linear-gradient(180deg, #f6fffd, #ecfaf6);
+    }
+
+    .lane-card:nth-child(3) {
+      background: linear-gradient(180deg, #fff8f7, #fdeeee);
+    }
+
+    .lane-card ol,
+    .status-card ul,
+    .runtime-card ul,
+    .shutdown-card ul {
+      margin: 12px 0 0;
+      padding-left: 20px;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .status-card.good {
+      background: linear-gradient(180deg, #f3fffb, #e8fbf4);
+    }
+
+    .status-card.wait {
+      background: linear-gradient(180deg, #fffaf1, #fff0db);
+    }
+
+    .status-card.run {
+      background: linear-gradient(180deg, #f2f7ff, #e7effe);
+    }
+
+    .status-card.fail {
+      background: linear-gradient(180deg, #fff7f6, #fee8e5);
+    }
+
+    .runtime-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .code-block {
+      margin-top: 12px;
+      padding: 14px;
+      border-radius: 14px;
+      background: #18222d;
+      color: #f4f7fa;
+      overflow-x: auto;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .footer-note {
+      margin-top: 20px;
+      padding: 16px 18px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.65);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    @media (max-width: 1100px) {
+      .flow-grid,
+      .runtime-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .flow-card::after {
+        display: none;
+      }
+    }
+
+    @media (max-width: 860px) {
+      .hero-grid,
+      .lane-grid,
+      .status-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .page {
+        width: min(100% - 20px, 1200px);
+        padding-top: 18px;
+      }
+
+      .hero,
+      .section {
+        padding: 18px;
+      }
+
+      .flow-grid,
+      .runtime-grid {
+        grid-template-columns: 1fr;
+      }
+
+      h1 {
+        max-width: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <span class="eyebrow">APR Monitoring Visual Guide</span>
+      <h1>How The APR Monitor Actually Moves A Run</h1>
+      <p>
+        This page mirrors the current APR monitoring code path. It focuses on the main loop,
+        item-status rules, batch queueing and submission, per-item completion during a running batch,
+        and shutdown behavior through <code>bjobs</code> / <code>bkill</code>.
+      </p>
+
+      <div class="hero-grid">
+        <div class="stat-panel">
+          <strong>Main Rule</strong>
+          <p>
+            A run becomes <code>Completed</code> only when both outputs exist:
+            the source DB under the IMP run directory and the timing DB under DashAI APR_RUNS.
+            If the log becomes newer than the timing DB, the run returns to
+            <code>Await Extraction</code>.
+          </p>
+        </div>
+        <div class="stat-panel">
+          <strong>Core Runtime State</strong>
+          <div class="chips">
+            <span class="chip"><code>pending_items</code></span>
+            <span class="chip"><code>running_batches</code></span>
+            <span class="chip"><code>available_batch_slots</code></span>
+            <span class="chip"><code>next_batch_id</code></span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <nav>
+      <a href="#loop">Main Loop</a>
+      <a href="#batch">Batch Lifecycle</a>
+      <a href="#status">Status Rules</a>
+      <a href="#runtime">Runtime Structures</a>
+      <a href="#shutdown">Shutdown</a>
+    </nav>
+
+    <section class="section" id="loop">
+      <div class="section-header">
+        <div>
+          <h2>Main Flow</h2>
+          <p>The shared FLOW monitor calls the APR modules in this order for every cycle and every discovered log item.</p>
+        </div>
+      </div>
+      <div class="flow-grid">
+        <article class="flow-card">
+          <div class="step-no">1</div>
+          <h3>Get Items</h3>
+          <p><code>APR_MONITOR_ITEMS</code> refreshes runtime paths, loads state and force-extract payloads, reconciles running batches, persists dirty runtime data, and discovers log files.</p>
+        </article>
+        <article class="flow-card">
+          <div class="step-no">2</div>
+          <h3>Compute Status</h3>
+          <p><code>APR_ITEM_STATUS</code> parses the log, reads file metadata, checks source and timing outputs, and computes both status and the base tracker comment.</p>
+        </article>
+        <article class="flow-card">
+          <div class="step-no">3</div>
+          <h3>Batch Action</h3>
+          <p><code>APR_STATUS_ACTION</code> validates Await Extraction items, queues them, forms batches, submits slot files, and marks submitted runs as Extracting.</p>
+        </article>
+        <article class="flow-card">
+          <div class="step-no">4</div>
+          <h3>Tracker Update</h3>
+          <p><code>APR_UPDATE_TRACKER</code> fills KPI fields for Completed runs and pushes the tracker row into SQLite through the writer thread.</p>
+        </article>
+        <article class="flow-card">
+          <div class="step-no">5</div>
+          <h3>Batch Log</h3>
+          <p><code>APR_UPDATE_LOG</code> keeps only batch-level logging: submit, complete, and terminate events.</p>
+        </article>
+        <article class="flow-card">
+          <div class="step-no">6</div>
+          <h3>Persist State</h3>
+          <p><code>APR_UPDATE_STATE</code> stores the new state entry back into the shared JSON state file only when changes happened.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="batch">
+      <div class="section-header">
+        <div>
+          <h2>Batch Lifecycle</h2>
+          <p>The extraction side is queue-driven. Runs move from Await Extraction into a FIFO queue, then into slot-backed batch files, then into active running batches.</p>
+        </div>
+      </div>
+      <div class="lane-grid">
+        <article class="lane-card">
+          <h3>Queue</h3>
+          <ol>
+            <li>Only items with computed status <code>Await Extraction</code> enter batch handling.</li>
+            <li>Validation happens first:
+              missing KPI file -> <code>ERR002</code>,
+              missing timing reports -> <code>ERR003</code>.
+            </li>
+            <li>Valid items are inserted into <code>pending_items</code> only if they are not already pending and not already running.</li>
+            <li>The queue is an <code>OrderedDict</code>, so extraction order is FIFO.</li>
+          </ol>
+        </article>
+        <article class="lane-card">
+          <h3>Form And Submit</h3>
+          <ol>
+            <li>If pending count reaches <code>BATCH_SIZE</code>, launch immediately.</li>
+            <li>If it stays smaller, wait until the oldest item ages past <code>BATCH_RUN_WAIT_TIME</code>, then launch a short batch.</li>
+            <li>At most <code>MAX_PARALLEL_BATCHES</code> can run at once.</li>
+            <li>Each batch claims one reusable slot file such as <code>BATCH_COMMAND_1.txt</code>.</li>
+          </ol>
+          <div class="code-block"><pre>module load Python3/3.11.1
+python3 APR_TIMING_INNOVUS.py &lt;project_code&gt; &lt;stage&gt; &lt;run_dir&gt;
+python3 APR_TIMING_INNOVUS.py &lt;project_code&gt; &lt;stage&gt; &lt;run_dir&gt;
+
+utilq -Is source &lt;slot_file&gt;</pre></div>
+        </article>
+        <article class="lane-card">
+          <h3>Reconcile</h3>
+          <ol>
+            <li>Every cycle, running batches are checked before the submit process exit code matters.</li>
+            <li>If any item already has both outputs, it flips to <code>Completed</code> immediately.</li>
+            <li>When the batch process exits, the first unresolved item becomes <code>Extraction Failed</code>.</li>
+            <li>Later unresolved items go back to <code>Await Extraction</code> for retry on the next cycle.</li>
+          </ol>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="status">
+      <div class="section-header">
+        <div>
+          <h2>Status Rules</h2>
+          <p>These are the high-level decision buckets used when APR_ITEM_STATUS computes one log's status.</p>
+        </div>
+      </div>
+      <div class="status-grid">
+        <article class="status-card good">
+          <h3>Completed</h3>
+          <p>Both outputs exist:
+            <code>source_db_exists</code> and <code>timing_db_exists</code>.
+            The log must not be newer than the timing DB.
+          </p>
+        </article>
+        <article class="status-card wait">
+          <h3>Await Extraction</h3>
+          <p>Used when:
+            force extract is set,
+            source DB exists but timing DB does not,
+            the log is newer than the timing DB,
+            or an unfinished batch item is retried.
+          </p>
+        </article>
+        <article class="status-card run">
+          <h3>Extracting / Job Running</h3>
+          <p><code>Extracting</code> means the run is already part of a submitted batch.
+            <code>Job Running</code> means neither output exists yet and the log still looks active by age.
+          </p>
+        </article>
+        <article class="status-card fail">
+          <h3>Failed States</h3>
+          <p><code>Job Failed</code> covers generic source-side failure and persisted validation failures.
+            <code>Extraction Failed</code> covers missing timing reports or the first failed item in a finished batch.
+          </p>
+        </article>
+      </div>
+      <div class="footer-note">
+        Tracker comments are intentionally simple:
+        <code>-</code>, <code>ERR001</code>, <code>ERR002</code>, <code>ERR003</code>, or <code>QC PASS</code>.
+        Completed runs stay Completed even when KPI extraction later decides the KPI content is incomplete; in that case the comment becomes <code>ERR002</code> and <code>Promote=no</code>.
+      </div>
+    </section>
+
+    <section class="section" id="runtime">
+      <div class="section-header">
+        <div>
+          <h2>Runtime Structures</h2>
+          <p>The monitor keeps persistent run state on disk, but queues and submit-process objects stay in memory.</p>
+        </div>
+      </div>
+      <div class="runtime-grid">
+        <article class="runtime-card">
+          <h3><code>pending_items</code></h3>
+          <ul>
+            <li>FIFO extraction queue</li>
+            <li>Contains lightweight batch items</li>
+            <li>Used to form full and short batches</li>
+          </ul>
+        </article>
+        <article class="runtime-card">
+          <h3><code>running_batches</code></h3>
+          <ul>
+            <li>One record per submitted batch</li>
+            <li>Stores batch id, slot file, submit command, process, items, and state keys</li>
+            <li>Updated as items finish early</li>
+          </ul>
+        </article>
+        <article class="runtime-card">
+          <h3><code>available_batch_slots</code></h3>
+          <ul>
+            <li>Pool of reusable <code>BATCH_COMMAND_n.txt</code> files</li>
+            <li>Claimed on submit</li>
+            <li>Released when a batch exits or is terminated</li>
+          </ul>
+        </article>
+        <article class="runtime-card">
+          <h3><code>_ACTIVE_BATCH_PROCESSES</code></h3>
+          <ul>
+            <li>Fallback map of local submit <code>Popen</code> objects by PID</li>
+            <li>Used so shutdown can still find leftover local processes</li>
+            <li>Not the main batch model</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="shutdown">
+      <div class="section-header">
+        <div>
+          <h2>Shutdown And Recovery</h2>
+          <p>APR_CLOSE asks APR_STATUS_ACTION to terminate active work carefully, while preserving already-complete runs.</p>
+        </div>
+      </div>
+      <div class="lane-grid">
+        <article class="shutdown-card">
+          <h3>LSF Lookup</h3>
+          <p>The monitor scans LSF jobs using the stored slot file path or stored submit command so it can map a running batch back to a JOBID.</p>
+          <div class="code-block"><pre>bjobs -o "JOBID COMMAND"</pre></div>
+        </article>
+        <article class="shutdown-card">
+          <h3>Termination</h3>
+          <p>If a matching job is found, the monitor records the job id and issues <code>bkill</code>. It then still tears down the local submit process tree as a fallback.</p>
+          <div class="code-block"><pre>bkill &lt;JOBID&gt;</pre></div>
+        </article>
+        <article class="shutdown-card">
+          <h3>Per-Item Outcome</h3>
+          <ul>
+            <li>If both outputs already exist, keep <code>Completed</code>.</li>
+            <li>If still unresolved, reset to <code>Await Extraction</code>.</li>
+            <li>Pending-but-never-submitted items also return to <code>Await Extraction</code>.</li>
+          </ul>
+        </article>
+      </div>
+      <div class="footer-note">
+        The practical outcome is that the monitor is optimistic about work that already produced the needed artifacts, but conservative about anything still in-flight. On restart, unresolved runs naturally re-enter the batch queue through the normal status path.
+      </div>
+    </section>
+  </div>
+</body>
+</html>

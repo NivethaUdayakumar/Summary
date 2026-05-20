@@ -9,8 +9,9 @@ from pathlib import Path
 import APR_VARS
 import psutil
 from Backend.Monitor.APR.EXTRACTORS.APR_KPI_EXTRACT import get_kpi_report_path
-from Backend.Monitor.APR.EXTRACTORS.APR_TIMING_INNOVUS import get_timing_report_paths, get_timing_db_path as build_timing_db_path
+from Backend.Monitor.APR.EXTRACTORS.APR_TIMING_INNOVUS import get_timing_report_paths
 import Backend.Monitor.APR.MONITORING.APR_SLEEP as APR_SLEEP
+from Backend.Monitor.APR.MONITORING import APR_OUTPUTS
 from Backend.Monitor.APR.MONITORING import APR_UPDATE_LOG
 
 
@@ -148,16 +149,6 @@ def finalize_ready_batch_items_now(context):
     }
 
 
-def finalize_ready_batch_item(context, state_key):
-    """
-    Function Name: finalize_ready_batch_item
-    Purpose: Immediately finalize all ready in-flight APR runs and report whether the requested run was one of them.
-    Input Params: context (dict), state_key (str)
-    Output: finalized (bool)
-    """
-    return state_key in finalize_ready_batch_items_now(context)["completed_force_keys"]
-
-
 def get_validation_error_code(state_entry):
     """
     Function Name: get_validation_error_code
@@ -197,6 +188,54 @@ def check_valid_job(file_item):
     return ""
 
 
+def _get_batch_settings():
+    """
+    Function Name: _get_batch_settings
+    Purpose: Return the live APR batch-size, parallelism, and short-batch wait settings.
+    Input Params: outputs (None)
+    Output: batch_settings (dict)
+    """
+    settings = APR_VARS.get_runtime_settings()
+    return {
+        "batch_size": max(1, int(settings["BATCH_SIZE"])),
+        "batch_wait_time": max(0, int(settings["BATCH_RUN_WAIT_TIME"])),
+        "max_parallel_batches": max(1, int(settings["MAX_PARALLEL_BATCHES"])),
+    }
+
+
+def _get_state_entry(state, state_key):
+    """
+    Function Name: _get_state_entry
+    Purpose: Return one mutable APR state entry with its Created timestamp populated.
+    Input Params: state (dict), state_key (str)
+    Output: state_entry (dict)
+    """
+    state_entry = dict(state.get(state_key, {}))
+    state_entry.setdefault("Created", APR_VARS.now_str())
+    return state_entry
+
+
+def _format_command_parts(command_parts):
+    """
+    Function Name: _format_command_parts
+    Purpose: Format one argv-style batch command into a readable shell-like string for logs and LSF lookup.
+    Input Params: command_parts (list[str])
+    Output: command_text (str)
+    """
+    return " ".join(shlex.quote(str(command_part)) for command_part in command_parts)
+
+
+def _batch_item_outputs_complete(context, batch_item):
+    """
+    Function Name: _batch_item_outputs_complete
+    Purpose: Check whether both completion outputs exist for one APR batch item.
+    Input Params: context (dict), batch_item (dict)
+    Output: is_complete (bool)
+    """
+    output_state = APR_OUTPUTS.get_output_state(context["project_code"], batch_item["log_path"], batch_item["log_meta"])
+    return APR_OUTPUTS.outputs_are_complete(output_state)
+
+
 def reconcile_batches(context, state):
     """
     Function Name: reconcile_batches
@@ -229,6 +268,7 @@ def reconcile_batches(context, state):
             batch_info["item_count"],
             result["success_count"],
             result["failed_count"],
+            batch_info.get("submit_command", ""),
         )
 
     _dispatch_ready_batches(context)
@@ -290,12 +330,31 @@ def shutdown_runtime(context, state):
             if batch_process_id:
                 handled_process_ids.add(batch_process_id)
 
-            _terminate_batch_process(batch_process)
+            _terminate_batch(batch_info)
             _unregister_batch_process(context, batch_process)
-            for batch_item in batch_info["items"]:
-                state_entry = _set_await_state(state, batch_item, "terminated")
+            _release_batch_slot(runtime, batch_info.get("slot_index"))
+            completed_count = 0
+            reset_count = 0
+            completed_at = APR_VARS.now_str()
+            for batch_item in list(batch_info["items"]):
+                if _batch_item_outputs_complete(context, batch_item):
+                    state_entry = _set_success_state(state, batch_item, completed_at)
+                    completed_count += 1
+                else:
+                    state_entry = _set_await_state(state, batch_item, "terminated")
+                    reset_count += 1
                 _push_batch_item_tracker_state(context, batch_item, state_entry)
                 state_dirty = True
+
+            APR_UPDATE_LOG.log_batch_termination(
+                context,
+                batch_info["batch_id"],
+                batch_info["item_count"],
+                completed_count,
+                reset_count,
+                batch_info.get("submit_command", ""),
+                batch_info.get("lsf_job_id", ""),
+            )
 
         for batch_item in list(runtime["pending_items"].values()):
             state_entry = _set_await_state(state, batch_item, "pending")
@@ -338,18 +397,7 @@ def _build_batch_item(context, file_item):
         "run_dir": os.path.abspath(str(Path(file_item["log_path"]).resolve().parent.parent)),
         "stage": log_meta["Stage"],
         "state_key": file_item["state_key"],
-        "timing_db_path": _get_timing_db_path(context["project_code"], log_meta),
     }
-
-
-def _get_timing_db_path(project_code, log_meta):
-    """
-    Function Name: _get_timing_db_path
-    Purpose: Build the absolute DashAI timing database path that should be created for one APR run extraction.
-    Input Params: project_code (str), log_meta (dict)
-    Output: db_path (str)
-    """
-    return build_timing_db_path(project_code, log_meta)
 
 
 def _dispatch_ready_batches(context):
@@ -360,10 +408,10 @@ def _dispatch_ready_batches(context):
     Output: outputs (None)
     """
     runtime = _get_runtime(context)
-    settings = APR_VARS.get_runtime_settings()
-    batch_size = max(1, int(settings["BATCH_SIZE"]))
-    max_parallel_batches = max(1, int(settings["MAX_PARALLEL_BATCHES"]))
-    batch_wait_time = max(0, int(settings["BATCH_RUN_WAIT_TIME"]))
+    batch_settings = _get_batch_settings()
+    batch_size = batch_settings["batch_size"]
+    max_parallel_batches = batch_settings["max_parallel_batches"]
+    batch_wait_time = batch_settings["batch_wait_time"]
     _sync_batch_command_slots(context, runtime, max_parallel_batches)
 
     while len(runtime["running_batches"]) < max_parallel_batches:
@@ -394,48 +442,48 @@ def _submit_batch(context, runtime, batch_items):
     batch_id = f"{context['project_code']}-{runtime['next_batch_id']}"
     runtime["next_batch_id"] += 1
 
-    max_parallel_batches = max(1, int(APR_VARS.get_runtime_settings()["MAX_PARALLEL_BATCHES"]))
-    slot_index = _claim_batch_slot(context, runtime, max_parallel_batches)
+    batch_settings = _get_batch_settings()
+    slot_index = _claim_batch_slot(context, runtime, batch_settings["max_parallel_batches"])
     if slot_index is None:
         _requeue_batch_items(runtime, batch_items)
         return False
 
     batch_file_path = _get_batch_command_file_path(context["runtime_paths"]["batch_commands_dir"], slot_index)
-    command_text = _build_batch_command(batch_file_path)
-    submitted_at = time.time()
+    command_parts = _build_batch_command(batch_file_path)
+    submit_command = _format_command_parts(command_parts)
     process = None
     try:
         _write_batch_file(batch_file_path, _build_batch_file_lines(context, batch_items))
         project_name = context["project_code"].replace("dthpcadm_", "")
-        process = _spawn_batch_process(command_text, project_name)
+        process = _spawn_batch_process(command_parts, project_name)
         _register_batch_process(context, process)
-        print(f"Submitted batch {batch_id} with PID {process.pid} | batch_file: {batch_file_path} | command: {command_text}")
+        print(f"Submitted batch {batch_id} with PID {process.pid} | batch_file: {batch_file_path} | command: {submit_command}")
     except Exception:
         if process is not None:
             _terminate_batch_process(process)
             _unregister_batch_process(context, process)
         _release_batch_slot(runtime, slot_index)
         _requeue_batch_items(runtime, batch_items)
-        APR_UPDATE_LOG.log_batch_completion(context, batch_id, len(batch_items), 0, len(batch_items))
+        APR_UPDATE_LOG.log_batch_completion(context, batch_id, len(batch_items), 0, len(batch_items), submit_command)
         return False
 
     batch_info = {
         "batch_id": batch_id,
         "batch_file_path": batch_file_path,
-        "command_text": command_text,
         "item_count": len(batch_items),
         "items": batch_items,
+        "lsf_job_id": "",
         "process": process,
         "slot_index": slot_index,
         "state_keys": {batch_item["state_key"] for batch_item in batch_items},
-        "submitted_at": submitted_at,
+        "submit_command": submit_command,
+        "submit_command_parts": list(command_parts),
         "success_count": 0,
-        "terminated": False,
     }
     runtime["running_batches"][batch_id] = batch_info
 
     _mark_batch_items_extracting(context, batch_items)
-    APR_UPDATE_LOG.log_batch_submission(context, batch_id, len(batch_items))
+    APR_UPDATE_LOG.log_batch_submission(context, batch_id, len(batch_items), submit_command, batch_file_path)
     return True
 
 
@@ -593,17 +641,16 @@ def _build_batch_command(batch_file_path):
     Function Name: _build_batch_command
     Purpose: Build the APR batch shell command that submits one prepared slot command file through utilq.
     Input Params: batch_file_path (str)
-    Output: command_text (str)
+    Output: command_parts (list[str])
     """
-    #return f"utilq -Is source {shlex.quote(os.path.abspath(str(batch_file_path)))}"
     return ["utilq", "-Is", "source", os.path.abspath(str(batch_file_path))]
 
 
-def _spawn_batch_process(command_text, project_name):
+def _spawn_batch_process(command_parts, project_name):
     """
     Function Name: _spawn_batch_process
     Purpose: Spawn the APR batch subprocess that runs the chained extractor command string.
-    Input Params: command_text (str), project_name (str)
+    Input Params: command_parts (list[str]), project_name (str)
     Output: process (subprocess.Popen)
     """
     my_env = os.environ.copy()
@@ -615,11 +662,10 @@ def _spawn_batch_process(command_text, project_name):
     }
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        return subprocess.Popen(command_text, **kwargs)
+        return subprocess.Popen(command_parts, **kwargs)
 
-    shell_path = "/bin/bash" if os.path.exists("/bin/bash") else os.environ.get("SHELL", "/bin/sh")
     kwargs["start_new_session"] = True
-    return subprocess.Popen(command_text, **kwargs)
+    return subprocess.Popen(command_parts, **kwargs)
 
 
 def _mark_batch_items_extracting(context, batch_items):
@@ -632,8 +678,7 @@ def _mark_batch_items_extracting(context, batch_items):
     state = context["state"]
     state_extracting = APR_VARS.get_setting("STATE_EXTRACTING")
     for batch_item in batch_items:
-        state_entry = dict(state.get(batch_item["state_key"], {}))
-        state_entry.setdefault("Created", APR_VARS.now_str())
+        state_entry = _get_state_entry(state, batch_item["state_key"])
         state_entry["Force_extract"] = 0
         state_entry["Last_status"] = state_extracting
         state[batch_item["state_key"]] = state_entry
@@ -660,11 +705,13 @@ def _mark_file_item_invalid(context, file_item, error_code):
     file_item["tracker_record"]["Promote"] = "no"
     file_item["tracker_record"]["Status"] = status
 
-    file_item["state_entry"].setdefault("Created", completed_at)
-    file_item["state_entry"]["Force_extract"] = 0
-    file_item["state_entry"]["Last_extract_finished_at"] = completed_at
-    file_item["state_entry"]["Last_extract_result"] = f"{_VALIDATION_RESULT_PREFIX}{error_code}"
-    file_item["state_entry"]["Last_status"] = status
+    state_entry = _get_state_entry(context["state"], file_item["state_key"])
+    state_entry.update(file_item["state_entry"])
+    state_entry["Force_extract"] = 0
+    state_entry["Last_extract_finished_at"] = completed_at
+    state_entry["Last_extract_result"] = f"{_VALIDATION_RESULT_PREFIX}{error_code}"
+    state_entry["Last_status"] = status
+    file_item["state_entry"] = state_entry
     file_item["state_changed"] = True
     context["state_dirty"] = True
 
@@ -763,7 +810,7 @@ def _finalize_ready_batch_items(context, state, batch_info):
     """
     ready_items = []
     for batch_item in batch_info["items"]:
-        if _db_was_written_after_submit(batch_item["timing_db_path"], batch_info["submitted_at"]):
+        if _batch_item_outputs_complete(context, batch_item):
             ready_items.append(batch_item)
 
     if not ready_items:
@@ -792,7 +839,7 @@ def _finalize_batch(context, state, batch_info, return_code):
     Output: result (dict)
     """
     completed_at = APR_VARS.now_str()
-    success_items, failed_item, retry_items = _classify_batch_items(batch_info, return_code)
+    success_items, failed_item, retry_items = _classify_batch_items(context, batch_info, return_code)
     completed_force_keys = set()
     state_dirty = False
 
@@ -823,11 +870,11 @@ def _finalize_batch(context, state, batch_info, return_code):
     }
 
 
-def _classify_batch_items(batch_info, return_code):
+def _classify_batch_items(context, batch_info, return_code):
     """
     Function Name: _classify_batch_items
     Purpose: Decide which APR runs in a finished batch succeeded, which failed first, and which should be retried.
-    Input Params: batch_info (dict), return_code (int)
+    Input Params: context (dict), batch_info (dict), return_code (int)
     Output: classification (tuple[list[dict], dict | None, list[dict]])
     """
     success_items = []
@@ -836,7 +883,7 @@ def _classify_batch_items(batch_info, return_code):
 
     if return_code == 0:
         for batch_item in batch_info["items"]:
-            if _db_was_written_after_submit(batch_item["timing_db_path"], batch_info["submitted_at"]):
+            if _batch_item_outputs_complete(context, batch_item):
                 success_items.append(batch_item)
             elif failed_item is None:
                 failed_item = batch_item
@@ -846,7 +893,7 @@ def _classify_batch_items(batch_info, return_code):
 
     first_missing_index = None
     for index, batch_item in enumerate(batch_info["items"]):
-        if _db_was_written_after_submit(batch_item["timing_db_path"], batch_info["submitted_at"]):
+        if _batch_item_outputs_complete(context, batch_item):
             if first_missing_index is None:
                 success_items.append(batch_item)
             continue
@@ -861,21 +908,6 @@ def _classify_batch_items(batch_info, return_code):
         retry_items = batch_info["items"][first_missing_index + 1 :]
 
     return success_items, failed_item, retry_items
-
-
-def _db_was_written_after_submit(db_path, submitted_at):
-    """
-    Function Name: _db_was_written_after_submit
-    Purpose: Check whether the expected APR timing database file exists (treat presence as completion).
-    Input Params: db_path (str), submitted_at (float)
-    Output: was_written (bool)
-    """
-    absolute_db_path = os.path.abspath(db_path)
-    try:
-        # Consider the timing DB existence sufficient to mark the run completed.
-        return os.path.exists(absolute_db_path)
-    except OSError:
-        return False
 
 
 def _mark_batch_item_success(context, state, batch_info, batch_item, completed_at, push_tracker=True):
@@ -908,8 +940,7 @@ def _set_success_state(state, batch_item, completed_at):
     Output: outputs (None)
     """
     state_done = APR_VARS.get_setting("STATE_DONE")
-    state_entry = dict(state.get(batch_item["state_key"], {}))
-    state_entry.setdefault("Created", APR_VARS.now_str())
+    state_entry = _get_state_entry(state, batch_item["state_key"])
     state_entry["Force_extract"] = 0
     state_entry["Last_extract_finished_at"] = completed_at
     state_entry["Last_extract_result"] = "success"
@@ -930,8 +961,7 @@ def _set_failure_state(state, batch_item, completed_at, return_code):
     Input Params: state (dict), batch_item (dict), completed_at (str), return_code (int)
     Output: outputs (None)
     """
-    state_entry = dict(state.get(batch_item["state_key"], {}))
-    state_entry.setdefault("Created", APR_VARS.now_str())
+    state_entry = _get_state_entry(state, batch_item["state_key"])
     state_entry["Force_extract"] = 0
     state_entry["Last_extract_finished_at"] = completed_at
     state_entry["Last_extract_result"] = f"batch_failed:{return_code}"
@@ -947,13 +977,110 @@ def _set_await_state(state, batch_item, reason):
     Input Params: state (dict), batch_item (dict), reason (str)
     Output: outputs (None)
     """
-    state_entry = dict(state.get(batch_item["state_key"], {}))
-    state_entry.setdefault("Created", APR_VARS.now_str())
+    state_entry = _get_state_entry(state, batch_item["state_key"])
     state_entry["Force_extract"] = 1
     state_entry["Last_extract_result"] = reason
     state_entry["Last_status"] = APR_VARS.get_setting("STATE_AWAIT")
     state[batch_item["state_key"]] = state_entry
     return state_entry
+
+
+def _get_batch_lookup_targets(batch_info):
+    """
+    Function Name: _get_batch_lookup_targets
+    Purpose: Return the command fragments that can identify one APR batch in `bjobs` output.
+    Input Params: batch_info (dict)
+    Output: lookup_targets (list[str])
+    """
+    return [
+        target
+        for target in (
+            str(batch_info.get("batch_file_path") or "").strip(),
+            str(batch_info.get("submit_command") or "").strip(),
+        )
+        if target
+    ]
+
+
+def _find_lsf_job_id(batch_info):
+    """
+    Function Name: _find_lsf_job_id
+    Purpose: Find the live LSF job id for one APR batch command by scanning `bjobs` output.
+    Input Params: batch_info (dict)
+    Output: job_id (str)
+    """
+    lookup_targets = _get_batch_lookup_targets(batch_info)
+    if not lookup_targets:
+        return ""
+
+    kwargs = {
+        "check": False,
+        "stderr": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "text": True,
+    }
+    create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if create_no_window:
+        kwargs["creationflags"] = create_no_window
+
+    try:
+        result = subprocess.run(["bjobs", "-o", "JOBID COMMAND"], **kwargs)
+    except Exception:
+        return ""
+
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if not line or line.upper().startswith("JOBID"):
+            continue
+
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+
+        job_id, command_text = parts
+        if any(lookup_target in command_text for lookup_target in lookup_targets):
+            return job_id
+    return ""
+
+
+def _kill_lsf_job(job_id):
+    """
+    Function Name: _kill_lsf_job
+    Purpose: Kill one LSF job by id using `bkill`.
+    Input Params: job_id (str)
+    Output: killed (bool)
+    """
+    if not str(job_id or "").strip():
+        return False
+
+    kwargs = {
+        "check": False,
+        "stderr": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+    }
+    create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if create_no_window:
+        kwargs["creationflags"] = create_no_window
+
+    try:
+        subprocess.run(["bkill", str(job_id).strip()], **kwargs)
+    except Exception:
+        return False
+    return True
+
+
+def _terminate_batch(batch_info):
+    """
+    Function Name: _terminate_batch
+    Purpose: Stop one APR batch through LSF when possible, then clean up the local submit process as a fallback.
+    Input Params: batch_info (dict)
+    Output: outputs (None)
+    """
+    job_id = _find_lsf_job_id(batch_info)
+    if job_id:
+        batch_info["lsf_job_id"] = job_id
+        _kill_lsf_job(job_id)
+    _terminate_batch_process(batch_info.get("process"))
 
 
 def _terminate_psutil_process_tree(root_pid, terminate_timeout=3, kill_timeout=2):

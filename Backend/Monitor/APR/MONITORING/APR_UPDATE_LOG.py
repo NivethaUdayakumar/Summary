@@ -82,39 +82,63 @@ def remove_old_logs(log_dir, keep_days=None):
             pass
 
 
-def log_batch_submission(context, batch_id, item_count):
+def log_batch_submission(context, batch_id, item_count, submit_command="", batch_file_path=""):
     """
     Function Name: log_batch_submission
-    Purpose: Write the batch submission event that records when a batch starts and how many items it contains.
-    Input Params: context (dict), batch_id (str), item_count (int)
+    Purpose: Write the batch submission event that records when a batch starts, what file it uses, and how many items it contains.
+    Input Params: context (dict), batch_id (str), item_count (int), submit_command (str), batch_file_path (str)
     Output: outputs (None)
     """
     logger = context.get("logger")
     if logger is None:
         return
     logger.info(
-        "batch_submitted | batch_id=%s | items=%s",
+        "batch_submitted | batch_id=%s | items=%s | batch_file=%s | command=%s",
         batch_id,
         item_count,
+        batch_file_path,
+        submit_command,
     )
 
 
-def log_batch_completion(context, batch_id, item_count, success_count, failed_count):
+def log_batch_completion(context, batch_id, item_count, success_count, failed_count, submit_command=""):
     """
     Function Name: log_batch_completion
-    Purpose: Write the batch completion event with total, success, and failure counts for the finished batch.
-    Input Params: context (dict), batch_id (str), item_count (int), success_count (int), failed_count (int)
+    Purpose: Write the batch completion event with total, success, failure, and command details for the finished batch.
+    Input Params: context (dict), batch_id (str), item_count (int), success_count (int), failed_count (int), submit_command (str)
     Output: outputs (None)
     """
     logger = context.get("logger")
     if logger is None:
         return
     logger.info(
-        "batch_completed | batch_id=%s | items=%s | success=%s | failed=%s",
+        "batch_completed | batch_id=%s | items=%s | success=%s | failed=%s | command=%s",
         batch_id,
         item_count,
         success_count,
         failed_count,
+        submit_command,
+    )
+
+
+def log_batch_termination(context, batch_id, item_count, completed_count, reset_count, submit_command="", lsf_job_id=""):
+    """
+    Function Name: log_batch_termination
+    Purpose: Write the shutdown event for one interrupted batch, including how many items stayed completed versus were reset.
+    Input Params: context (dict), batch_id (str), item_count (int), completed_count (int), reset_count (int), submit_command (str), lsf_job_id (str)
+    Output: outputs (None)
+    """
+    logger = context.get("logger")
+    if logger is None:
+        return
+    logger.info(
+        "batch_terminated | batch_id=%s | items=%s | completed=%s | reset=%s | lsf_job_id=%s | command=%s",
+        batch_id,
+        item_count,
+        completed_count,
+        reset_count,
+        lsf_job_id,
+        submit_command,
     )
 
 

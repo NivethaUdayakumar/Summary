@@ -11,20 +11,22 @@ def apply_kpi_status(tracker_record, log_path, state_entry=None):
     Output: tracker_record (dict)
     """
     settings = APR_VARS.get_runtime_settings()
+    status = tracker_record["Status"]
+    comment = str(tracker_record.get("Comments") or "-").strip() or "-"
     validation_error = APR_STATUS_ACTION.get_validation_error_code(state_entry)
-    if tracker_record["Status"] == settings["STATE_DONE"]:
+    if status == settings["STATE_DONE"]:
         tracker_record.update(extract_apr_kpi(log_path))
         is_valid = all(tracker_record[column_name] != "" for column_name in settings["KPI_COLUMNS"])
         tracker_record["Comments"] = "QC PASS" if is_valid else "ERR002"
         tracker_record["Promote"] = "yes" if is_valid else "no"
-    elif validation_error and tracker_record["Status"] in {settings["STATE_FAILED"], settings["STATE_EXTRACT_FAILED"]}:
+    elif validation_error and status in {settings["STATE_FAILED"], settings["STATE_EXTRACT_FAILED"]}:
         tracker_record["Comments"] = validation_error
         tracker_record["Promote"] = "no"
-    elif tracker_record["Status"] == settings["STATE_FAILED"]:
-        tracker_record["Comments"] = "ERR001"
+    elif status == settings["STATE_FAILED"]:
+        tracker_record["Comments"] = comment if comment != "-" else "ERR001"
         tracker_record["Promote"] = "no"
-    elif tracker_record["Status"] == settings["STATE_EXTRACT_FAILED"]:
-        tracker_record["Comments"] = "ERR003"
+    elif status == settings["STATE_EXTRACT_FAILED"]:
+        tracker_record["Comments"] = comment if comment != "-" else "ERR003"
         tracker_record["Promote"] = "no"
     return tracker_record
 

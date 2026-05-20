@@ -181,6 +181,49 @@ def get_log_paths(base_path, context=None):
     return sorted(paths)
 
 
+def load_runtime_payloads(context, runtime_paths):
+    """
+    Function Name: load_runtime_payloads
+    Purpose: Load the APR state file and force-extract payload into the shared runtime context for this monitor cycle.
+    Input Params: context (dict), runtime_paths (dict)
+    Output: outputs (tuple[dict, dict])
+    """
+    state = load_state_file(runtime_paths["state_file"])
+    force_extract_payload = load_force_extract_payload(runtime_paths["force_extract_file"])
+    context["state"] = state
+    context["force_extract_payload"] = force_extract_payload
+    return state, force_extract_payload
+
+
+def persist_runtime_payloads(context, include_state=False):
+    """
+    Function Name: persist_runtime_payloads
+    Purpose: Persist the APR state and force-extract payload files only when this monitor cycle marked them dirty.
+    Input Params: context (dict), include_state (bool)
+    Output: outputs (None)
+    """
+    if include_state or context.get("state_dirty"):
+        save_state_file(context)
+    if context.get("force_extract_dirty"):
+        save_force_extract_payload(context)
+
+
+def build_monitor_item(log_path, state):
+    """
+    Function Name: build_monitor_item
+    Purpose: Build one monitor-item descriptor with the saved APR state snapshot for a discovered log path.
+    Input Params: log_path (str), state (dict)
+    Output: monitor_item (dict)
+    """
+    log_meta = APR_ITEM_STATUS.parse_log_args(log_path)
+    state_key = log_meta["State_key"]
+    return {
+        "log_path": log_path,
+        "saved_state": dict(state.get(state_key, {})),
+        "state_key": state_key,
+    }
+
+
 def get_monitor_items(context):
     """
     Function Name: get_monitor_items
@@ -191,10 +234,7 @@ def get_monitor_items(context):
     runtime_paths = refresh_runtime_context(context)
     context["writer"].check()
 
-    state = load_state_file(runtime_paths["state_file"])
-    force_extract_payload = load_force_extract_payload(runtime_paths["force_extract_file"])
-    context["state"] = state
-    context["force_extract_payload"] = force_extract_payload
+    state, force_extract_payload = load_runtime_payloads(context, runtime_paths)
 
     reconcile_result = APR_STATUS_ACTION.reconcile_batches(context, state)
     if reconcile_result["completed_force_keys"]:
@@ -205,24 +245,10 @@ def get_monitor_items(context):
     if apply_force_extract_requests(state, force_extract_payload, reserved_state_keys):
         context["state_dirty"] = True
 
-    if reconcile_result["state_dirty"] or context["state_dirty"]:
-        save_state_file(context)
-    if context["force_extract_dirty"]:
-        save_force_extract_payload(context)
+    persist_runtime_payloads(context, include_state=reconcile_result["state_dirty"])
 
     project_imp_dir = os.path.abspath(str(Path(runtime_paths["settings"]["PROJECTS_BASE_DIR"]) / context["project_code"] / "IMP"))
-    monitor_items = []
-    for log_path in get_log_paths(project_imp_dir, context):
-        log_meta = APR_ITEM_STATUS.parse_log_args(log_path)
-        state_key = log_meta["State_key"]
-        monitor_items.append(
-            {
-                "log_path": log_path,
-                "saved_state": dict(context["state"].get(state_key, {})),
-                "state_key": state_key,
-            }
-        )
-    return monitor_items
+    return [build_monitor_item(log_path, context["state"]) for log_path in get_log_paths(project_imp_dir, context)]
 
 
 def load_state_file(state_file):
