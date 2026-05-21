@@ -1,6 +1,9 @@
 import sys
 
-import FLOW_CONTEXT_BUILDER
+try:
+    from Backend.Monitor.FLOW import FLOW_CONTEXT_BUILDER
+except ModuleNotFoundError:
+    import FLOW_CONTEXT_BUILDER
 
 
 def BUILD_FLOW_CONTEXT():

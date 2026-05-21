@@ -1,7 +1,7 @@
 import signal
 import time
 
-import APR_VARS
+from Backend.Monitor.APR import APR_VARS
 
 
 STOP_REQUESTED = {"value": False}

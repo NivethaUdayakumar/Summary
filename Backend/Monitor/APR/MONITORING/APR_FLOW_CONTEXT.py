@@ -2,8 +2,8 @@ import json
 import os
 from pathlib import Path
 
-import APR_DB_ACTIONS
-import APR_VARS
+from Backend.Monitor.APR import APR_DB_ACTIONS
+from Backend.Monitor.APR import APR_VARS
 import Backend.Monitor.APR.MONITORING.APR_SLEEP as APR_SLEEP
 
 

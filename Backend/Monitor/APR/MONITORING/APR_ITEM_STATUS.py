@@ -3,7 +3,7 @@ import os
 import time
 from pathlib import Path
 
-import APR_VARS
+from Backend.Monitor.APR import APR_VARS
 from Backend.Monitor.APR.EXTRACTORS.APR_KPI_EXTRACT import get_kpi_report_path
 from Backend.Monitor.APR.EXTRACTORS.APR_TIMING_INNOVUS import (
     get_timing_db_path as build_timing_db_path,

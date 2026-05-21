@@ -58,22 +58,21 @@ def _get_flow_dir(selected_flow):
 def _ensure_import_roots(selected_flow):
     """
     Function Name: _ensure_import_roots
-    Purpose: Ensure Python can resolve both repo-style package imports and plain FLOW-local helper imports.
+    Purpose: Validate the selected FLOW directory and ensure repo-style package imports resolve from the repository root.
     Input Params: selected_flow (str)
     Output: flow_dir (Path)
     """
     flow_dir = _get_flow_dir(selected_flow)
-    for import_root in reversed((ROOT_DIR, flow_dir)):
-        import_root_str = str(import_root)
-        if import_root_str not in sys.path:
-            sys.path.insert(0, import_root_str)
+    root_dir_str = str(ROOT_DIR)
+    if root_dir_str not in sys.path:
+        sys.path.insert(0, root_dir_str)
     return flow_dir
 
 
 def _get_module_candidates(selected_flow, module_suffix):
     """
     Function Name: _get_module_candidates
-    Purpose: Build the supported absolute import paths for one selected FLOW module suffix.
+    Purpose: Build the supported import paths for one selected FLOW module suffix.
     Input Params: selected_flow (str), module_suffix (str)
     Output: module_candidates (list[str])
     """

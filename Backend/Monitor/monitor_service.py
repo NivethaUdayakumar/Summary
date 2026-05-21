@@ -200,7 +200,10 @@ class MonitorService:
             raise ImportError(f"Unable to load module: {module_path}")
 
         module = importlib.util.module_from_spec(spec)
+        root_dir = str(ROOT_DIR)
         module_dir = str(module_path.parent)
+        if root_dir not in sys.path:
+            sys.path.insert(0, root_dir)
         if module_dir not in sys.path:
             sys.path.insert(0, module_dir)
         spec.loader.exec_module(module)

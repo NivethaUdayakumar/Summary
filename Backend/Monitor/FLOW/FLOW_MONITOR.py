@@ -1,4 +1,7 @@
-import FLOW_ACTIONS
+try:
+    from Backend.Monitor.FLOW import FLOW_ACTIONS
+except ModuleNotFoundError:
+    import FLOW_ACTIONS
 
 def main():
     """

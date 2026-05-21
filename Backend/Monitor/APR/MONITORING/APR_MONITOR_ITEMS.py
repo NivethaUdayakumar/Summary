@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-import APR_VARS
+from Backend.Monitor.APR import APR_VARS
 from Backend.Monitor.APR.MONITORING import APR_FLOW_CONTEXT
 import Backend.Monitor.APR.MONITORING.APR_SLEEP as APR_SLEEP
 from Backend.Monitor.APR.MONITORING import APR_STATUS_ACTION

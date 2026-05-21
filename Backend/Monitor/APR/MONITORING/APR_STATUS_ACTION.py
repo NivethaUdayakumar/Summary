@@ -4,7 +4,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-import APR_VARS
+from Backend.Monitor.APR import APR_VARS
 import Backend.Monitor.APR.MONITORING.APR_SLEEP as APR_SLEEP
 from Backend.Monitor.APR.EXTRACTORS.APR_TIMING_INNOVUS import get_timing_db_path as build_timing_db_path
 from Backend.Monitor.APR.MONITORING import APR_FLOW_CONTEXT

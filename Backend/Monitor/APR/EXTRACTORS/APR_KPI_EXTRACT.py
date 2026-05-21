@@ -2,7 +2,7 @@ import csv
 import os
 from pathlib import Path
 
-import APR_VARS
+from Backend.Monitor.APR import APR_VARS
 
 
 def get_kpi_report_path(log_path):

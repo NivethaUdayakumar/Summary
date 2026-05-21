@@ -3,7 +3,7 @@ import queue
 import sqlite3
 import threading
 
-import APR_VARS
+from Backend.Monitor.APR import APR_VARS
 
 
 def get_db_path(base_dir):

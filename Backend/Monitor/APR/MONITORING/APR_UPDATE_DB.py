@@ -1,6 +1,6 @@
 import os
 
-import APR_VARS
+from Backend.Monitor.APR import APR_VARS
 from Backend.Monitor.APR.EXTRACTORS.APR_KPI_EXTRACT import extract_apr_kpi
 from Backend.Monitor.APR.MONITORING import APR_FLOW_CONTEXT
 from Backend.Monitor.APR.MONITORING import APR_ITEM_STATUS
