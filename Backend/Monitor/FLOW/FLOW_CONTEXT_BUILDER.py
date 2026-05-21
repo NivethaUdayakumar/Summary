@@ -2,21 +2,31 @@ import importlib
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 
 FLOW_DIR = Path(__file__).resolve().parent
 MONITOR_DIR = FLOW_DIR.parent
+ROOT_DIR = MONITOR_DIR.parent.parent
+FLOW_CONTEXT_MODULE_SUFFIX = "FLOW_CONTEXT"
 
 FLOW_MODULE_SPECS = {
-    "MONITOR_ITEMS": ("{flow}_MONITOR_ITEMS", ("build_context", "get_monitor_items")),
-    "ITEM_STATUS": ("{flow}_ITEM_STATUS", ("get_item_status",)),
-    "STATUS_ACTION": ("{flow}_STATUS_ACTION", ("perform_status_action",)),
-    "UPDATE_TRACKER": ("{flow}_UPDATE_TRACKER", ("update_tracker",)),
-    "UPDATE_STATE": ("{flow}_UPDATE_STATE", ("update_state",)),
-    "UPDATE_LOG": ("{flow}_UPDATE_LOG", ("update_log",)),
-    "SLEEP": ("{flow}_SLEEP", ("should_exit", "sleep_monitor")),
-    "CLOSE": ("{flow}_CLOSE", ("close_context",)),
+    "MONITOR_ITEMS": ("MONITOR_ITEMS", ("get_monitor_items",)),
+    "ITEM_STATUS": ("ITEM_STATUS", ("get_item_status",)),
+    "STATUS_ACTION": ("STATUS_ACTION", ("perform_status_action",)),
+    "SLEEP": ("SLEEP", ("should_exit", "sleep_monitor")),
+    "CLOSE": ("CLOSE", ("close_context",)),
 }
+
+FLOW_UPDATE_MODULE_SPECS = (
+    ("UPDATE_TRACKER", "UPDATE_TRACKER", "update_tracker"),
+    ("UPDATE_STATE", "UPDATE_STATE", "update_state"),
+    ("UPDATE_LOG", "UPDATE_LOG", "update_log"),
+)
+
+
+class MissingFlowModuleError(ImportError):
+    """Raised when a selected flow module does not exist in either supported import location."""
 
 
 def _normalize_flow_name(flow_name):
@@ -45,49 +55,52 @@ def _get_flow_dir(selected_flow):
     return flow_dir
 
 
-def _get_flow_module_dirs(selected_flow):
+def _ensure_import_roots(selected_flow):
     """
-    Function Name: _get_flow_module_dirs
-    Purpose: Return the module search directories for one FLOW, preferring its MONITORING subfolder when present.
+    Function Name: _ensure_import_roots
+    Purpose: Ensure Python can resolve both repo-style package imports and plain FLOW-local helper imports.
     Input Params: selected_flow (str)
-    Output: module_dirs (list[Path])
+    Output: flow_dir (Path)
     """
     flow_dir = _get_flow_dir(selected_flow)
-    module_dirs = [flow_dir]
-    monitoring_dir = flow_dir / "MONITORING"
-    if monitoring_dir.is_dir():
-        module_dirs.insert(0, monitoring_dir)
-    return module_dirs
+    for import_root in reversed((ROOT_DIR, flow_dir)):
+        import_root_str = str(import_root)
+        if import_root_str not in sys.path:
+            sys.path.insert(0, import_root_str)
+    return flow_dir
 
 
-def _ensure_flow_dirs_on_path(flow_dirs):
+def _get_module_candidates(selected_flow, module_suffix):
     """
-    Function Name: _ensure_flow_dirs_on_path
-    Purpose: Insert the FLOW module directories into sys.path so the selected monitor modules can be imported.
-    Input Params: flow_dirs (list[Path])
-    Output: outputs (None)
+    Function Name: _get_module_candidates
+    Purpose: Build the supported absolute import paths for one selected FLOW module suffix.
+    Input Params: selected_flow (str), module_suffix (str)
+    Output: module_candidates (list[str])
     """
-    for flow_dir in reversed(flow_dirs):
-        flow_dir_str = str(flow_dir)
-        if flow_dir_str not in sys.path:
-            sys.path.insert(0, flow_dir_str)
+    flow_package = f"Backend.Monitor.{selected_flow}"
+    return [
+        f"{flow_package}.MONITORING.{selected_flow}_{module_suffix}",
+        f"{flow_package}.{selected_flow}_{module_suffix}",
+    ]
 
 
-def _load_flow_modules(selected_flow):
+def _load_flow_module(selected_flow, module_suffix, required_functions):
     """
-    Function Name: _load_flow_modules
-    Purpose: Import and validate the full shared FLOW module set required for the selected monitor flow.
-    Input Params: selected_flow (str)
-    Output: modules (dict)
+    Function Name: _load_flow_module
+    Purpose: Import one FLOW module from the supported package locations and validate its required functions.
+    Input Params: selected_flow (str), module_suffix (str), required_functions (tuple[str, ...])
+    Output: module (module)
     """
-    flow_dirs = _get_flow_module_dirs(selected_flow)
-    _ensure_flow_dirs_on_path(flow_dirs)
-
-    modules = {}
-    for key, (module_template, required_functions) in FLOW_MODULE_SPECS.items():
-        module_name = module_template.format(flow=selected_flow)
+    module_candidates = _get_module_candidates(selected_flow, module_suffix)
+    last_not_found_error = None
+    for module_name in module_candidates:
         try:
             module = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            if exc.name == module_name:
+                last_not_found_error = exc
+                continue
+            raise ImportError(f"Unable to load flow module '{module_name}'") from exc
         except Exception as exc:
             raise ImportError(f"Unable to load flow module '{module_name}'") from exc
 
@@ -101,9 +114,74 @@ def _load_flow_modules(selected_flow):
             raise AttributeError(
                 f"Flow module '{module_name}' is missing required functions: {missing_display}"
             )
+        return module
 
-        modules[key] = module
+    candidates_display = ", ".join(module_candidates)
+    raise MissingFlowModuleError(
+        f"Unable to locate flow module for '{selected_flow}_{module_suffix}'. Tried: {candidates_display}"
+    ) from last_not_found_error
 
+
+def _build_update_db_module(update_modules):
+    """
+    Function Name: _build_update_db_module
+    Purpose: Adapt split tracker/state/log flow update modules into the shared single update_db hook.
+    Input Params: update_modules (dict)
+    Output: update_db_module (types.SimpleNamespace)
+    """
+    def update_db(context, file_item):
+        update_modules["UPDATE_TRACKER"].update_tracker(context, file_item)
+        update_modules["UPDATE_STATE"].update_state(context, file_item)
+        update_modules["UPDATE_LOG"].update_log(context, file_item)
+
+    return SimpleNamespace(update_db=update_db)
+
+
+def _load_context_module(selected_flow):
+    """
+    Function Name: _load_context_module
+    Purpose: Load the selected flow context-builder module, preferring a dedicated FLOW_CONTEXT file and falling back to MONITOR_ITEMS when needed.
+    Input Params: selected_flow (str)
+    Output: context_module (module)
+    """
+    try:
+        return _load_flow_module(selected_flow, FLOW_CONTEXT_MODULE_SUFFIX, ("build_context",))
+    except MissingFlowModuleError:
+        return _load_flow_module(selected_flow, "MONITOR_ITEMS", ("build_context",))
+
+
+def _load_update_modules(selected_flow):
+    """
+    Function Name: _load_update_modules
+    Purpose: Load either a legacy single update-db module or the split update pipeline and expose one update_db hook.
+    Input Params: selected_flow (str)
+    Output: update_modules (dict)
+    """
+    try:
+        return {
+            "UPDATE_DB": _load_flow_module(selected_flow, "UPDATE_DB", ("update_db",)),
+        }
+    except MissingFlowModuleError:
+        update_modules = {}
+        for module_key, module_suffix, function_name in FLOW_UPDATE_MODULE_SPECS:
+            update_modules[module_key] = _load_flow_module(selected_flow, module_suffix, (function_name,))
+        update_modules["UPDATE_DB"] = _build_update_db_module(update_modules)
+        return update_modules
+
+
+def _load_flow_modules(selected_flow):
+    """
+    Function Name: _load_flow_modules
+    Purpose: Import and validate the full shared FLOW module set required for the selected monitor flow.
+    Input Params: selected_flow (str)
+    Output: modules (dict)
+    """
+    _ensure_import_roots(selected_flow)
+
+    modules = {}
+    for key, (module_suffix, required_functions) in FLOW_MODULE_SPECS.items():
+        modules[key] = _load_flow_module(selected_flow, module_suffix, required_functions)
+    modules.update(_load_update_modules(selected_flow))
     return modules
 
 
@@ -120,10 +198,13 @@ def build_context(flow_name, project_code):
         raise ValueError("PROJECT_CODE is required")
 
     modules = _load_flow_modules(selected_flow)
-    context = modules["MONITOR_ITEMS"].build_context(normalized_project_code)
+    context_module = _load_context_module(selected_flow)
+    context = context_module.build_context(normalized_project_code)
     if not isinstance(context, dict):
-        raise TypeError(f"{selected_flow}_MONITOR_ITEMS.build_context must return a dict")
+        raise TypeError(f"{selected_flow} flow context builder must return a dict")
 
+    context.setdefault("flow", selected_flow)
+    context.setdefault("project_code", normalized_project_code)
     context["FLOW"] = selected_flow
     context["PROJECT_CODE"] = normalized_project_code
     context["FLOW_MODULES"] = modules

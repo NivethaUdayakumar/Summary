@@ -3,10 +3,10 @@ import sys
 import FLOW_CONTEXT_BUILDER
 
 
-def CHECK_SYS_ARGS():
+def BUILD_FLOW_CONTEXT():
     """
-    Function Name: CHECK_SYS_ARGS
-    Purpose: Validate FLOW monitor command-line arguments and build the runtime context for the requested flow and project.
+    Function Name: BUILD_FLOW_CONTEXT
+    Purpose: Build the runtime context for the requested flow and project.
     Input Params: outputs (None)
     Output: context (dict)
     """
@@ -56,35 +56,14 @@ def PERFORM_STATUS_ACTION(context, file_item):
     context["FLOW_MODULES"]["STATUS_ACTION"].perform_status_action(context, file_item)
 
 
-def UPDATE_TRACKER(context, file_item):
+def UPDATE_DB(context, file_item):
     """
-    Function Name: UPDATE_TRACKER
-    Purpose: Forward one monitor item to the selected flow tracker-update module for tracker persistence.
+    Function Name: UPDATE_DB
+    Purpose: Forward one monitor item to the selected flow database-update module for database persistence.
     Input Params: context (dict), file_item (dict)
     Output: outputs (None)
     """
-    context["FLOW_MODULES"]["UPDATE_TRACKER"].update_tracker(context, file_item)
-
-
-def UPDATE_STATE(context, file_item):
-    """
-    Function Name: UPDATE_STATE
-    Purpose: Forward one monitor item to the selected flow state-update module for state persistence.
-    Input Params: context (dict), file_item (dict)
-    Output: outputs (None)
-    """
-    context["FLOW_MODULES"]["UPDATE_STATE"].update_state(context, file_item)
-
-
-def UPDATE_LOG(context, file_item):
-    """
-    Function Name: UPDATE_LOG
-    Purpose: Forward one monitor item to the selected flow log-update module for monitor logging.
-    Input Params: context (dict), file_item (dict)
-    Output: outputs (None)
-    """
-    context["FLOW_MODULES"]["UPDATE_LOG"].update_log(context, file_item)
-
+    context["FLOW_MODULES"]["UPDATE_DB"].update_db(context, file_item)
 
 def SLEEP(context):
     """

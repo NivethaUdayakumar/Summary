@@ -65,23 +65,55 @@ class MonitorService:
     def _safe_name(self, value: str) -> bool:
         return bool(re.fullmatch(r"[A-Za-z0-9_]+", value or ""))
 
-    def _is_central_flow_template(self, template_dir: Path, template_name: str):
-        module_suffixes = [
-            "MONITOR_ITEMS",
-            "ITEM_STATUS",
-            "STATUS_ACTION",
-            "UPDATE_TRACKER",
-            "UPDATE_STATE",
-            "UPDATE_LOG",
-            "SLEEP",
-            "CLOSE",
-        ]
-        required_modules = []
+    def _supports_update_run(self, _template_name: str):
+        """
+        Function Name: _supports_update_run
+        Purpose: Report whether the monitor service currently supports a manual update-runs action for one template.
+        Input Params: _template_name (str)
+        Output: supports_update_run (bool)
+        """
+        return False
+
+    def _has_flow_modules(self, template_dir: Path, template_name: str, module_suffixes):
+        """
+        Function Name: _has_flow_modules
+        Purpose: Check whether one flow template exposes a full required module set from either its root folder or MONITORING subfolder.
+        Input Params: template_dir (Path), template_name (str), module_suffixes (list[str] | tuple[str, ...])
+        Output: has_modules (bool)
+        """
         for suffix in module_suffixes:
             root_path = template_dir / f"{template_name}_{suffix}.py"
             monitoring_path = template_dir / "MONITORING" / f"{template_name}_{suffix}.py"
-            required_modules.append(root_path.exists() or monitoring_path.exists())
-        return FLOW_MONITOR_SCRIPT.exists() and all(required_modules)
+            if not (root_path.exists() or monitoring_path.exists()):
+                return False
+        return True
+
+    def _is_central_flow_template(self, template_dir: Path, template_name: str):
+        module_sets = [
+            (
+                "FLOW_CONTEXT",
+                "MONITOR_ITEMS",
+                "ITEM_STATUS",
+                "STATUS_ACTION",
+                "UPDATE_DB",
+                "SLEEP",
+                "CLOSE",
+            ),
+            (
+                "MONITOR_ITEMS",
+                "ITEM_STATUS",
+                "STATUS_ACTION",
+                "UPDATE_TRACKER",
+                "UPDATE_STATE",
+                "UPDATE_LOG",
+                "SLEEP",
+                "CLOSE",
+            ),
+        ]
+        return FLOW_MONITOR_SCRIPT.exists() and any(
+            self._has_flow_modules(template_dir, template_name, module_suffixes)
+            for module_suffixes in module_sets
+        )
 
     def list_projects(self):
         if not APP_PROJECT_JSON.exists():
@@ -127,7 +159,7 @@ class MonitorService:
                 "script_path": str(script_path),
                 "launch_mode": launch_mode,
                 "has_hide_runs": False,
-                "has_update_run": True
+                "has_update_run": self._supports_update_run(template_name)
             })
 
         return sorted(templates, key=lambda x: x["template_name"])
@@ -187,13 +219,6 @@ class MonitorService:
         db_ops = self._load_python_module(db_ops_path, f"{template_name}_db_ops")
         defs = self._load_python_module(defs_path, f"{template_name}_defs")
         return db_ops, defs
-
-    def _make_state_key(self, defs_module, job: str, milestone: str, block: str, stage: str):
-        if hasattr(defs_module, "make_key"):
-            return defs_module.make_key(job, milestone, block, stage)
-        if hasattr(defs_module, "make_state_key"):
-            return defs_module.make_state_key(job, milestone, block, stage)
-        return f"{job}--{milestone}--{block}--{stage}"
 
     def _supports_graceful_shutdown(self, template_name: str):
         return self._is_central_flow_template(self._get_template_dir(template_name), template_name) or template_name == "APR"
@@ -794,7 +819,7 @@ class MonitorService:
                 "updated_at": row["updated_at"],
                 "last_started_at": row["last_started_at"] or "",
                 "has_hide_runs": False,
-                "has_update_run": True
+                "has_update_run": self._supports_update_run(row["template_name"])
             })
 
         if cleanup_rows:
@@ -892,125 +917,8 @@ class MonitorService:
             "view_mode": view_mode
         }
 
-    def _get_force_extract_file(self, project_code: str, defs_module):
-        force_file_name = getattr(defs_module, "FORCE_EXTRACT_FILE_NAME", None)
-        if not force_file_name:
-            raise AttributeError("Template does not define FORCE_EXTRACT_FILE_NAME")
-
-        dashai_dir = PROJECTS_BASE_DIR / project_code / "DashAI"
-        dashai_dir.mkdir(parents=True, exist_ok=True)
-
-        if getattr(defs_module, "FORCE_EXTRACT_IN_DASHAI_ROOT", False):
-            return dashai_dir / force_file_name
-
-        state_dir_name = getattr(defs_module, "STATE_DIR", "States")
-        state_dir = dashai_dir / state_dir_name
-        state_dir.mkdir(parents=True, exist_ok=True)
-        return state_dir / force_file_name
-
-    def _queue_force_extract_runs(self, project_code: str, template_name: str, run_rows):
-        if not self._safe_name(project_code):
-            raise ValueError("Invalid project_code")
-        if not self._safe_name(template_name):
-            raise ValueError("Invalid template_name")
-
-        _, defs = self._load_template_modules(template_name)
-        force_extract_file = self._get_force_extract_file(project_code, defs)
-
-        comment_text = getattr(
-            defs,
-            "FORCE_EXTRACT_JSON_COMMENT",
-            "Input type is { job: j, milestone:m, block: b, stage: s }",
-        )
-        items_key = getattr(defs, "FORCE_EXTRACT_JSON_ITEMS_KEY", "items")
-        payload = {
-            "_comment": comment_text,
-            items_key: [],
-        }
-        if force_extract_file.exists():
-            try:
-                raw_payload = json.loads(force_extract_file.read_text(encoding="utf-8"))
-                if isinstance(raw_payload, list):
-                    payload[items_key] = raw_payload
-                elif isinstance(raw_payload, dict):
-                    payload.update(raw_payload)
-            except Exception:
-                payload = {
-                    "_comment": comment_text,
-                    items_key: [],
-                }
-
-        payload["_comment"] = comment_text
-        if not isinstance(payload.get(items_key), list):
-            payload[items_key] = []
-
-        normalized_items = []
-        existing_set = set()
-        for item in payload[items_key]:
-            if not isinstance(item, dict):
-                continue
-
-            normalized_item = {
-                "job": str(item.get("job", item.get("Job", "")) or "").strip(),
-                "milestone": str(item.get("milestone", item.get("Milestone", "")) or "").strip(),
-                "block": str(item.get("block", item.get("Block", "")) or "").strip(),
-                "stage": str(item.get("stage", item.get("Stage", "")) or "").strip(),
-            }
-            if not all(normalized_item.values()):
-                continue
-
-            state_key = self._make_state_key(
-                defs,
-                normalized_item["job"],
-                normalized_item["milestone"],
-                normalized_item["block"],
-                normalized_item["stage"],
-            )
-            if state_key in existing_set:
-                continue
-            existing_set.add(state_key)
-            normalized_items.append(normalized_item)
-        payload[items_key] = normalized_items
-
-        queued = 0
-
-        for row in run_rows:
-            job = str(row.get("Job", "")).strip()
-            milestone = str(row.get("Milestone", "")).strip()
-            block = str(row.get("Block", "")).strip()
-            stage = str(row.get("Stage", "")).strip()
-
-            if not all([job, milestone, block, stage]):
-                continue
-
-            state_key = self._make_state_key(defs, job, milestone, block, stage)
-            if state_key in existing_set:
-                continue
-
-            payload[items_key].append(
-                {
-                    "job": job,
-                    "milestone": milestone,
-                    "block": block,
-                    "stage": stage,
-                }
-            )
-            existing_set.add(state_key)
-            queued += 1
-
-        tmp_file = force_extract_file.with_suffix(force_extract_file.suffix + ".tmp")
-        tmp_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        tmp_file.replace(force_extract_file)
-
-        return {
-            "queued": queued,
-            "action": "update",
-            "project_code": project_code,
-            "template_name": template_name
-        }
-
     def hide_or_unhide_runs(self, project_code: str, template_name: str, run_rows, action: str):
         raise ValueError("Hide and unhide are not supported for this monitor")
 
     def update_runs(self, project_code: str, template_name: str, run_rows):
-        return self._queue_force_extract_runs(project_code, template_name, run_rows)
+        raise ValueError("Manual update runs are not supported for this monitor. Delete the timing DB to re-extract.")

@@ -1,33 +1,51 @@
-import importlib
 import getpass
 import os
 import time
 from pathlib import Path
 
 import APR_VARS
-from Backend.Monitor.APR.MONITORING import APR_OUTPUTS
-from Backend.Monitor.APR.MONITORING import APR_STATUS_ACTION
+from Backend.Monitor.APR.EXTRACTORS.APR_KPI_EXTRACT import get_kpi_report_path
+from Backend.Monitor.APR.EXTRACTORS.APR_TIMING_INNOVUS import (
+    get_timing_db_path as build_timing_db_path,
+    get_timing_report_paths,
+)
+from Backend.Monitor.APR.MONITORING import APR_FLOW_CONTEXT
 
 try:
-    pwd = importlib.import_module("pwd")
+    import pwd
 except ImportError:
     pwd = None
 
 
-def parse_log_args(filename):
+def parse_log_args(log_path):
     """
     Function Name: parse_log_args
-    Purpose: Parse the absolute APR log path into the job, milestone, block, stage, and state-key fields used by the monitor.
-    Input Params: filename (str)
+    Purpose: Parse one APR stage log path into the tracker scope fields used throughout the monitor.
+    Input Params: log_path (str)
     Output: log_meta (dict)
     """
-    normalized_path = os.path.abspath(filename).replace("\\", "/").strip("/")
-    path_parts = normalized_path.split("/")
-    job = path_parts[-3] if len(path_parts) >= 3 else ""
-    milestone = path_parts[4] if len(path_parts) > 4 else ""
-    block = path_parts[5] if len(path_parts) > 5 else ""
-    stage = Path(filename).stem
-    dft_release = get_dft_release(filename)
+    path_parts = list(Path(os.path.abspath(log_path)).parts)
+    lowered_parts = [path_part.lower() for path_part in path_parts]
+    flow_name = str(APR_VARS.get_setting("DEFAULT_FLOW")).lower()
+    tool_name = str(APR_VARS.get_setting("DEFAULT_TOOL")).lower()
+    job = ""
+    milestone = ""
+    block = ""
+    for index, path_part in enumerate(lowered_parts[:-1]):
+        if path_part != flow_name:
+            continue
+        if index + 1 >= len(lowered_parts) or lowered_parts[index + 1] != tool_name:
+            continue
+        if index >= 2:
+            milestone = path_parts[index - 2]
+            block = path_parts[index - 1]
+        if index + 2 < len(path_parts):
+            job = path_parts[index + 2]
+        break
+    if not job and len(path_parts) >= 3:
+        job = path_parts[-3]
+    stage = Path(log_path).stem
+    dft_release = get_dft_release(log_path)
     return {
         "Block": block,
         "Dft_release": dft_release,
@@ -38,39 +56,40 @@ def parse_log_args(filename):
     }
 
 
-def get_dft_release(filename):
+def get_dft_release(log_path):
     """
     Function Name: get_dft_release
-    Purpose: Resolve the DFT release name associated with one APR run by following its linked DFT input files.
-    Input Params: filename (str)
+    Purpose: Resolve the DFT release name for one APR run by following the linked DFT inputs when available.
+    Input Params: log_path (str)
     Output: dft_release (str)
     """
     try:
-        log_path = Path(os.path.abspath(filename))
-        input_dir = log_path.parent.parent.parent / "inputs" / "dft" / "vlog"
+        absolute_log_path = Path(os.path.abspath(log_path))
+        input_dir = absolute_log_path.parent.parent.parent / "inputs" / "dft" / "vlog"
         if not input_dir.exists():
             return "NA"
 
         for candidate in input_dir.glob("*dft.v"):
             real_path = os.path.realpath(str(candidate)).replace("\\", "/")
-            if "/iExchange/DFT/" in real_path:
-                path_parts = real_path.strip("/").split("/")
-                if len(path_parts) >= 3:
-                    return path_parts[-3]
+            if "/iExchange/DFT/" not in real_path:
+                continue
+            path_parts = real_path.strip("/").split("/")
+            if len(path_parts) >= 3:
+                return path_parts[-3]
     except Exception:
         pass
     return "NA"
 
 
-def get_file_info(file_path):
+def get_file_info(log_path):
     """
     Function Name: get_file_info
-    Purpose: Read APR log file metadata that is needed for change detection and tracker row fields.
-    Input Params: file_path (str)
+    Purpose: Read the APR stage log file metadata required for status computation and tracker updates.
+    Input Params: log_path (str)
     Output: file_info (dict)
     """
-    absolute_file_path = os.path.abspath(file_path)
-    file_stat = os.stat(absolute_file_path)
+    absolute_log_path = os.path.abspath(log_path)
+    file_stat = os.stat(absolute_log_path)
     user_name = ""
     if pwd is not None:
         try:
@@ -90,154 +109,163 @@ def get_file_info(file_path):
     }
 
 
-def build_record(log_path, created, meta=None, info=None):
+def get_source_db_path(log_path, log_meta=None):
     """
-    Function Name: build_record
-    Purpose: Build the default APR tracker row for one log file before status-specific updates are applied.
-    Input Params: log_path (str), created (str), meta (dict | None), info (dict | None)
+    Function Name: get_source_db_path
+    Purpose: Build the absolute APR source-dbinfo path that belongs to one monitored stage log.
+    Input Params: log_path (str), log_meta (dict | None)
+    Output: source_db_path (str)
+    """
+    absolute_log_path = Path(os.path.abspath(log_path))
+    run_directory = absolute_log_path.parent.parent
+    metadata = log_meta or parse_log_args(log_path)
+    return str(run_directory / "dbs" / f"{metadata['Stage']}_final" / f"{metadata['Job']}.dat" / f"{metadata['Job']}.dbinfo")
+
+
+def get_timing_db_path(project_code, log_meta):
+    """
+    Function Name: get_timing_db_path
+    Purpose: Build the absolute DashAI timing database path for one monitored APR stage item.
+    Input Params: project_code (str), log_meta (dict)
+    Output: timing_db_path (str)
+    """
+    return build_timing_db_path(project_code, log_meta)
+
+
+def get_path_mtime(path):
+    """
+    Function Name: get_path_mtime
+    Purpose: Return one path's integer mtime when the path exists.
+    Input Params: path (str)
+    Output: mtime (int | None)
+    """
+    try:
+        return int(os.path.getmtime(os.path.abspath(path)))
+    except OSError:
+        return None
+
+
+def build_tracker_record(log_path, state_entry, meta=None, file_info=None):
+    """
+    Function Name: build_tracker_record
+    Purpose: Build one APR tracker row from the current stage log metadata and the computed in-memory state entry.
+    Input Params: log_path (str), state_entry (dict), meta (dict | None), file_info (dict | None)
     Output: tracker_record (dict)
     """
-    settings = APR_VARS.get_runtime_settings()
     metadata = meta or parse_log_args(log_path)
-    file_info = info or get_file_info(log_path)
+    current_file_info = file_info or get_file_info(log_path)
     tracker_record = {
         "Block": metadata["Block"],
-        "Comments": "-",
-        "Created": created,
+        "Comments": state_entry.get("Comments") or "-",
+        "Created": state_entry.get("Last_Extract_Submission") or "",
         "Dft_release": metadata["Dft_release"],
         "Job": metadata["Job"],
         "Milestone": metadata["Milestone"],
-        "Modified": file_info["Modified"],
-        "Promote": "no",
-        "Rerun": 0,
+        "Modified": current_file_info["Modified"],
+        "Promote": "yes" if state_entry.get("Status") == APR_VARS.get_setting("STATE_DONE") else "no",
+        "Rerun": max(0, int(state_entry.get("Rerun", 0) or 0)),
         "Stage": metadata["Stage"],
-        "Status": "",
-        "User": file_info["User"],
+        "Status": state_entry.get("Status") or "",
+        "User": current_file_info["User"],
     }
-    tracker_record.update({column_name: "" for column_name in settings["KPI_COLUMNS"]})
+    tracker_record.update({column_name: "" for column_name in APR_VARS.get_setting("KPI_COLUMNS", [])})
     return tracker_record
 
 
-def get_status_comment(status, state_entry):
+def _compute_status(previous_state, file_info, source_db_exists, source_db_mtime, timing_db_exists, timing_db_mtime, kpi_file_exists, has_timing_reports):
     """
-    Function Name: get_status_comment
-    Purpose: Return the base tracker comment for one APR monitor status before KPI validation is applied.
-    Input Params: status (str), state_entry (dict)
-    Output: comment (str)
-    """
-    settings = APR_VARS.get_runtime_settings()
-    validation_error = APR_STATUS_ACTION.get_validation_error_code(state_entry)
-    if validation_error and status in {settings["STATE_FAILED"], settings["STATE_EXTRACT_FAILED"]}:
-        return validation_error
-    if status == settings["STATE_FAILED"]:
-        return "ERR001"
-    if status == settings["STATE_EXTRACT_FAILED"]:
-        return "ERR003"
-    return "-"
-
-
-def compute_status(context, state_entry, log_path, log_meta, file_info, is_extracting):
-    """
-    Function Name: compute_status
-    Purpose: Compute the APR monitor status for one run from file changes, source/timing outputs, persisted state, and batch activity.
-    Input Params: context (dict), state_entry (dict), log_path (str), log_meta (dict), file_info (dict), is_extracting (bool)
-    Output: outputs (tuple[str, str, dict, int])
+    Function Name: _compute_status
+    Purpose: Apply the APR runtime status rules using the current outputs and the persisted light state entry.
+    Input Params: previous_state (dict), file_info (dict), source_db_exists (bool), source_db_mtime (int | None), timing_db_exists (bool), timing_db_mtime (int | None), kpi_file_exists (bool), has_timing_reports (bool)
+    Output: outputs (tuple[str, str, bool, int])
     """
     settings = APR_VARS.get_runtime_settings()
-    now_epoch = int(time.time())
-    mtime = int(file_info["mtime"])
-    size = int(file_info["size"])
-    last_seen_mtime = state_entry.get("Last_seen_mtime")
-    last_seen_size = state_entry.get("Last_seen_size")
-    last_change_time = state_entry.get("Last_change_time")
-    last_extracted_mtime = state_entry.get("Last_extracted_mtime")
-    last_status = state_entry.get("Last_status")
-    validation_error = APR_STATUS_ACTION.get_validation_error_code(state_entry)
-    rerun_count = int(state_entry.get("Rerun", 0) or 0)
-    force_extract = int(state_entry.get("Force_extract", 0) or 0)
-    file_changed = last_seen_mtime is None or mtime != last_seen_mtime or size != last_seen_size
+    previous_status = previous_state.get("Status")
+    rerun_count = max(0, int(previous_state.get("Rerun", 0) or 0))
+    extract_completed = False
 
-    if file_changed:
-        last_change_time = now_epoch
+    if source_db_exists:
+        if timing_db_exists:
+            if source_db_mtime is not None and timing_db_mtime is not None and source_db_mtime < timing_db_mtime:
+                extract_completed = True
+                if kpi_file_exists:
+                    return settings["STATE_DONE"], "QC_PASS", extract_completed, rerun_count
+                return settings["STATE_FAILED"], "ERR002", extract_completed, rerun_count
 
-    output_state = APR_OUTPUTS.get_output_state(context["project_code"], log_path, log_meta)
-    outputs_complete = APR_OUTPUTS.outputs_are_complete(output_state)
-    effective_extract_mtime = output_state["timing_db_mtime"]
-    if effective_extract_mtime is None and last_extracted_mtime is not None:
-        effective_extract_mtime = int(last_extracted_mtime)
+            if previous_status == settings["STATE_EXTRACTING"]:
+                return settings["STATE_EXTRACTING"], "-", extract_completed, rerun_count
+            if has_timing_reports:
+                if previous_status != settings["STATE_AWAIT"]:
+                    rerun_count += 1
+                return settings["STATE_AWAIT"], "-", extract_completed, rerun_count
+            return settings["STATE_FAILED"], "ERR003", extract_completed, rerun_count
 
-    if is_extracting:
-        status = settings["STATE_EXTRACTING"]
-    elif force_extract == 1:
-        status = settings["STATE_AWAIT"]
-    elif outputs_complete:
-        if effective_extract_mtime is not None and mtime > effective_extract_mtime:
-            if last_status == settings["STATE_DONE"]:
-                rerun_count += 1
-            status = settings["STATE_AWAIT"]
-        else:
-            status = settings["STATE_DONE"]
-    elif validation_error in {"ERR001", "ERR002"} and not file_changed:
-        status = settings["STATE_FAILED"]
-    elif validation_error == "ERR003" and not file_changed:
-        status = settings["STATE_EXTRACT_FAILED"]
-    elif last_status == settings["STATE_EXTRACTING"] and not outputs_complete:
-        status = settings["STATE_AWAIT"]
-    elif last_status == settings["STATE_EXTRACT_FAILED"] and not file_changed:
-        status = settings["STATE_EXTRACT_FAILED"]
-    elif output_state["source_db_exists"]:
-        status = settings["STATE_AWAIT"]
-    else:
-        age = now_epoch - (last_change_time if last_change_time is not None else now_epoch)
-        status = settings["STATE_RUNNING"] if age <= 15 * 60 else settings["STATE_FAILED"]
+        if previous_status == settings["STATE_EXTRACTING"]:
+            return settings["STATE_EXTRACTING"], "-", extract_completed, rerun_count
+        if has_timing_reports:
+            return settings["STATE_AWAIT"], "-", extract_completed, rerun_count
+        return settings["STATE_FAILED"], "ERR003", extract_completed, rerun_count
 
-    state_entry["Last_change_time"] = last_change_time
-    state_entry["Last_seen_mtime"] = mtime
-    state_entry["Last_seen_size"] = size
-    state_entry["Last_status"] = status
-    state_entry["Rerun"] = rerun_count
-    return status, get_status_comment(status, state_entry), state_entry, rerun_count
+    if int(time.time()) - int(file_info["mtime"]) <= int(settings["RUN_ACTIVE_TIME"]):
+        return settings["STATE_RUNNING"], "-", extract_completed, rerun_count
+    return settings["STATE_FAILED"], "ERR001", extract_completed, rerun_count
 
 
 def get_item_status(context, monitor_item):
     """
     Function Name: get_item_status
-    Purpose: Build the full APR monitor item payload used by status action, tracker, state, and log update steps.
+    Purpose: Compute one APR stage item's current status, comments, rerun count, and tracker row entirely from live files plus the light persisted state entry.
     Input Params: context (dict), monitor_item (dict)
     Output: file_item (dict)
     """
+    project_code = APR_FLOW_CONTEXT.get_project_code(context)
     log_path = os.path.abspath(monitor_item["log_path"])
+    run_directory = os.path.abspath(monitor_item["run_directory"])
     log_meta = parse_log_args(log_path)
     file_info = get_file_info(log_path)
     state_key = log_meta["State_key"]
+    previous_state = dict(context.get("state", {}).get(state_key, {}))
 
-    # Finalize any already-ready batch items before computing a fresh status so
-    # this pass uses the latest shared batch state.
-    APR_STATUS_ACTION.finalize_ready_batch_items_now(context)
+    source_db_path = get_source_db_path(log_path, log_meta)
+    timing_db_path = get_timing_db_path(project_code, log_meta)
+    source_db_exists = os.path.exists(source_db_path)
+    timing_db_exists = os.path.exists(timing_db_path)
+    source_db_mtime = get_path_mtime(source_db_path) if source_db_exists else None
+    timing_db_mtime = get_path_mtime(timing_db_path) if timing_db_exists else None
+    kpi_report_path = get_kpi_report_path(log_path)
+    kpi_file_exists = os.path.exists(kpi_report_path)
+    has_timing_reports = bool(get_timing_report_paths(run_directory, log_meta["Stage"]))
 
-    saved_state = dict(context.get("state", {}).get(state_key, monitor_item.get("saved_state") or {}))
-    state_entry = dict(saved_state)
-
-    state_entry.setdefault("Created", APR_VARS.now_str())
-    tracker_record = build_record(log_path, state_entry["Created"], log_meta, file_info)
-    status, comment, state_entry, rerun_count = compute_status(
-        context,
-        state_entry,
-        log_path,
-        log_meta,
+    status, comments, extract_completed, rerun_count = _compute_status(
+        previous_state,
         file_info,
-        APR_STATUS_ACTION.is_item_in_flight(context, state_key),
+        source_db_exists,
+        source_db_mtime,
+        timing_db_exists,
+        timing_db_mtime,
+        kpi_file_exists,
+        has_timing_reports,
     )
-    tracker_record["Comments"] = comment
-    tracker_record["Rerun"] = rerun_count
-    tracker_record["Status"] = status
+    state_entry = {
+        "Comments": comments,
+        "Extract_Completed": extract_completed,
+        "Last_Extract_Submission": str(previous_state.get("Last_Extract_Submission") or "").strip(),
+        "Rerun": rerun_count,
+        "Status": status,
+    }
+    tracker_record = build_tracker_record(log_path, state_entry, meta=log_meta, file_info=file_info)
 
     return {
         "file_info": file_info,
+        "has_timing_reports": has_timing_reports,
+        "kpi_report_path": kpi_report_path,
         "log_meta": log_meta,
         "log_path": log_path,
-        "state_changed": state_entry != saved_state,
+        "run_directory": run_directory,
+        "source_db_path": source_db_path,
+        "state_changed": state_entry != previous_state,
         "state_entry": state_entry,
         "state_key": state_key,
+        "timing_db_path": timing_db_path,
         "tracker_record": tracker_record,
     }
